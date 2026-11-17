@@ -67,9 +67,9 @@ const VideoPlayer = ({ src, loop = false, onClick, badge }) => {
 };
 
 const buttons = [
-  { label: 'GitHub', href: 'https://github.com/AumkarMali', className: 'from-blue-500 px-5' },
-  { label: 'YouTube', href: 'https://www.youtube.com/@AumkarMali', className: 'from-red-500 px-4' },
-  { label: 'LinkedIn', href: LINKEDIN_URL, className: 'from-orange-500 px-4' },
+  { label: 'GitHub', href: 'https://github.com/AumkarMali', className: 'from-blue-500 to-blue-700 dark:to-transparent px-5' },
+  { label: 'YouTube', href: 'https://www.youtube.com/@AumkarMali', className: 'from-red-500 to-red-700 dark:to-transparent px-4' },
+  { label: 'LinkedIn', href: LINKEDIN_URL, className: 'from-orange-500 to-orange-700 dark:to-transparent px-4' },
 ];
 
 const HeroSection = () => {
@@ -120,7 +120,7 @@ const HeroSection = () => {
                 href={b.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={`shine block bg-gradient-to-r ${b.className} to-black-800 py-3 rounded-md text-white transition-all duration-300 hover:shadow-[0_0_25px_rgba(249,115,22,0.5)]`}
+                className={`shine block bg-gradient-to-r ${b.className} py-3 rounded-md text-white transition-all duration-300 hover:shadow-[0_0_25px_rgba(249,115,22,0.5)]`}
               >
                 {b.label}
               </a>
@@ -141,7 +141,7 @@ const HeroSection = () => {
 
       <motion.button
         onClick={() => document.getElementById('aboutSec')?.scrollIntoView({ behavior: 'smooth' })}
-        className="mt-16 mb-8 flex flex-col items-center gap-1 text-orange-300/70 hover:text-orange-300"
+        className="mt-16 mb-8 flex flex-col items-center gap-1 text-orange-700/80 hover:text-orange-800 dark:text-orange-300/70 dark:hover:text-orange-300"
         animate={{ y: [0, 10, 0] }}
         transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
         aria-label="Scroll to About"

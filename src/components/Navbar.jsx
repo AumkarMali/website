@@ -2,6 +2,7 @@ import { Menu, X, Sun, Moon } from "lucide-react";
 import { useState, useEffect } from "react";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import { navItems } from "../constants";
+import BinaryText from "./BinaryText";
 
 const CustomCursor = () => {
   const x = useMotionValue(-100);
@@ -113,7 +114,7 @@ const Navbar = () => {
             <div className="flex items-center flex-shrink-0">
               <span className={`text-xl tracking-tight 
                 ${darkMode ? 'text-orange-100' : 'text-neutral-900'}`}>
-                Aumkar Mali
+                <BinaryText as="span" text="Aumkar Mali" band={2} speed={4} decodeMs={1000} />
               </span>
             </div>
             
@@ -130,7 +131,7 @@ const Navbar = () => {
                           : 'text-neutral-600 hover:text-neutral-900'
                         }`}
                     >
-                      {item.label}
+                      <BinaryText as="span" text={item.label} band={1} speed={3} decodeMs={900} delay={index * 120} />
                     </a>
                   </li>
                 ))}
@@ -177,7 +178,7 @@ const Navbar = () => {
                           : 'text-neutral-600 hover:text-neutral-900'
                         }`}
                     >
-                      {item.label}
+                      <BinaryText as="span" text={item.label} band={1} speed={3} decodeMs={900} delay={index * 120} />
                     </a>
                   </li>
                 ))}

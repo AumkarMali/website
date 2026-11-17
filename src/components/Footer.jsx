@@ -32,7 +32,7 @@ const Footer = () => (
       <Magnetic>
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          className="flex items-center gap-2 rounded-full border border-orange-500/40 px-4 py-2 text-sm text-orange-200 transition-colors hover:bg-orange-500/10"
+          className="flex items-center gap-2 rounded-full border border-orange-500/40 px-4 py-2 text-sm text-orange-700 dark:text-orange-200 transition-colors hover:bg-orange-500/10"
         >
           <ArrowUp size={16} /> Back to top
         </button>

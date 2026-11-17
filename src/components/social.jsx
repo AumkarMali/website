@@ -73,7 +73,7 @@ const Social = () => {
         className="mx-auto mt-24 max-w-3xl text-center"
       >
         <h3 className="shimmer-text text-4xl font-bold sm:text-6xl">Let&apos;s build something.</h3>
-        <p className="mt-4 text-gray-400">Open to embedded, robotics and ML infrastructure roles.</p>
+        <p className="mt-4 text-gray-600 dark:text-gray-400">Open to embedded, robotics and ML infrastructure roles.</p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
           <Magnetic>
             <a
@@ -86,7 +86,7 @@ const Social = () => {
           <Magnetic>
             <button
               onClick={copyEmail}
-              className="inline-flex items-center gap-2 rounded-lg border border-orange-500/40 px-6 py-3 text-orange-200 transition-colors hover:bg-orange-500/10"
+              className="inline-flex items-center gap-2 rounded-lg border border-orange-500/40 px-6 py-3 text-orange-700 dark:text-orange-200 transition-colors hover:bg-orange-500/10"
             >
               {copied ? <Check size={18} className="text-emerald-400" /> : <Copy size={18} />}
               {copied ? 'Copied!' : 'Copy email'}

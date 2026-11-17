@@ -66,7 +66,7 @@ const SkillRadar = () => {
   return (
     <section className="relative px-5 lg:px-20">
       <SectionTitle text="Expertise" id="expertise" />
-      <p className="mx-auto mt-6 max-w-2xl text-center text-sm text-gray-400">
+      <p className="mx-auto mt-6 max-w-2xl text-center text-sm text-gray-600 dark:text-gray-400">
         Depth of experience in each area, scored 0-100 from the roles and projects on my resume.
       </p>
 
@@ -146,11 +146,11 @@ const SkillRadar = () => {
               key={d.axis}
               onPointerEnter={() => setActive(i)}
               onPointerLeave={() => setActive(null)}
-              className={`rounded-xl px-4 py-3 transition-colors ${active === i ? 'bg-white/5' : ''}`}
+              className={`rounded-xl px-4 py-3 transition-colors ${active === i ? 'bg-black/5 dark:bg-white/5' : ''}`}
             >
               <div className="flex items-baseline justify-between gap-4">
-                <span className="font-medium text-white">{d.axis}</span>
-                <span className="tabular-nums text-gray-300">{d.score}</span>
+                <span className="font-medium text-gray-900 dark:text-white">{d.axis}</span>
+                <span className="tabular-nums text-gray-700 dark:text-gray-300">{d.score}</span>
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full" style={{ background: 'rgba(234,88,12,0.15)' }}>
                 <motion.div
@@ -162,7 +162,7 @@ const SkillRadar = () => {
                   transition={{ duration: 1.2, delay: 0.1 * i, ease: [0.16, 1, 0.3, 1] }}
                 />
               </div>
-              <p className="mt-2 text-sm text-gray-400">{d.evidence}</p>
+              <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">{d.evidence}</p>
             </li>
           ))}
         </ul>

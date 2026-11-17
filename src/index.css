@@ -296,3 +296,13 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   text-shadow: 0 0 6px rgba(249, 115, 22, 0.6);
 }
+
+/* Light theme: neon titles and binary digits need darker ink on a light page */
+html:not(.dark) .neon-text {
+  color: #c2410c;
+  text-shadow: 0 0 14px rgba(249, 115, 22, 0.35);
+}
+html:not(.dark) .binary-char.bin::after {
+  color: #ea580c;
+  text-shadow: none;
+}

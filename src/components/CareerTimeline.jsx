@@ -42,7 +42,7 @@ const Entry = ({ item, index }) => {
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true, margin: '-120px' }}
         transition={{ duration: 0.8, delay: 0.2 }}
-        className={`hidden font-mono text-sm tracking-widest text-orange-300/70 md:row-start-1 md:block ${
+        className={`hidden font-mono text-sm tracking-widest text-orange-700 dark:text-orange-300/70 md:row-start-1 md:block ${
           left ? 'md:col-start-2 text-left' : 'md:col-start-1 text-right'
         }`}
       >
