@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { TypeAnimation } from 'react-type-animation';
 import { motion } from 'framer-motion';
 import { Magnetic, TiltCard } from './fx';
+import BinaryText from './BinaryText';
 
 const VideoComponent = ({ src }) => (
   <video
@@ -59,7 +60,7 @@ const ProjectCard = ({ index, title, description, technologies, videoSrc, imageS
                   </motion.span>
                 ))}
               </div>
-              <p className="text-gray-300 text-lg leading-relaxed">{description}</p>
+              <BinaryText className="text-gray-300 text-lg leading-relaxed" text={description} />
               <Magnetic>
                 <a
                   href={githubLink}
