@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { motion, useReducedMotion } from "framer-motion";
 import { TypeAnimation } from 'react-type-animation';  // Importing the TypeAnimation component
 
 const IntroductionPage = () => {
@@ -24,6 +25,41 @@ const IntroductionPage = () => {
 
     return () => observer.disconnect();
   }, []);
+
+  // Every couple of seconds two random tiles trade places (framer layout animation).
+  const reduceMotion = useReducedMotion();
+  const [order, setOrder] = useState(() => Array.from({ length: 12 }, (_, i) => i));
+  const [swapping, setSwapping] = useState([]);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  useEffect(() => {
+    if (!isVisible || reduceMotion) return;
+    let clear;
+    const swap = () => {
+      const a = Math.floor(Math.random() * 12);
+      let b = Math.floor(Math.random() * 11);
+      if (b >= a) b += 1;
+      const current = orderRef.current;
+      setSwapping([current[a], current[b]]);
+      setOrder((prev) => {
+        const next = [...prev];
+        [next[a], next[b]] = [next[b], next[a]];
+        return next;
+      });
+      clearTimeout(clear);
+      clear = setTimeout(() => setSwapping([]), 1000);
+    };
+    let interval;
+    const start = setTimeout(() => {
+      swap();
+      interval = setInterval(swap, 2200);
+    }, 3000); // after the tiles finish fading in
+    return () => {
+      clearTimeout(start);
+      clearInterval(interval);
+      clearTimeout(clear);
+    };
+  }, [isVisible, reduceMotion]);
 
   const skills = [
     { src: '/images/javascript-logo.png', alt: 'JavaScript', label: 'JavaScript' },
@@ -122,27 +158,37 @@ const IntroductionPage = () => {
         </h3>
 
         <div className="mt-5 mb-48 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-          {skills.map((item, index) => (
-            <div
-              key={item.label}
-              className={`flex flex-col items-center justify-center h-24 
-                bg-white/30 backdrop-blur-sm text-gray-500 rounded-lg shadow-lg 
-                transition-all duration-700 transform card-hover animated-bg
-                hover:shadow-xl hover:scale-105
-                ${isVisible 
-                  ? 'opacity-100 translate-y-0 scale-100' 
-                  : 'opacity-0 translate-y-10 scale-95'}`}
-              style={{
-                transitionDelay: `${index * 130}ms`,
-              }}
-            >
-              <div className="relative z-10">
-                <img src={item.src} alt={item.alt} className="h-12 w-auto" />
-                <span className="text-xl mt-2">{item.label}</span>
-              </div>
-            </div>
-       
-          ))}
+          {order.map((index) => {
+            const item = skills[index];
+            const isSwapping = swapping.includes(index);
+            return (
+              <motion.div
+                key={item.label}
+                layout
+                transition={{ type: 'spring', stiffness: 120, damping: 16, mass: 0.8 }}
+                style={{ zIndex: isSwapping ? 10 : 0, position: 'relative' }}
+              >
+                <div
+                  className={`flex flex-col items-center justify-center h-24 
+                    bg-white/30 backdrop-blur-sm text-gray-500 rounded-lg shadow-lg 
+                    transition-all duration-700 transform card-hover animated-bg
+                    hover:shadow-xl hover:scale-105
+                    ${isSwapping ? 'ring-2 ring-orange-500 shadow-[0_0_25px_rgba(249,115,22,0.7)]' : ''}
+                    ${isVisible 
+                      ? 'opacity-100 translate-y-0 scale-100' 
+                      : 'opacity-0 translate-y-10 scale-95'}`}
+                  style={{
+                    transitionDelay: `${index * 130}ms`,
+                  }}
+                >
+                  <div className="relative z-10">
+                    <img src={item.src} alt={item.alt} className="h-12 w-auto" />
+                    <span className="text-xl mt-2">{item.label}</span>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
     </div>

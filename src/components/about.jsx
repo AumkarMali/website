@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
-import { TypeAnimation } from 'react-type-animation'; // Import TypeAnimation component
+import { TypeAnimation } from 'react-type-animation';
+import BinaryText from './BinaryText';
 
 const AboutSection = () => {
   const cardVariants = {
@@ -51,9 +52,7 @@ const AboutSection = () => {
           className="rounded-lg p-6 bg-gradient-to-br from-purple-900/20 to-transparent backdrop-blur-sm border border-purple-500/20 hover:border-purple-500/40 transition-all duration-300"
         >
           <h3 className="text-2xl text-pink-500 mb-4">Past</h3>
-          <p className="text-gray-300 leading-relaxed">
-            I discovered my passion for programming when I was just 14 years old. What started as a hobby soon turned into a full-fledged passion for web development and software engineering. Over the years, I honed my skills in languages like Python, Java, and C++, as well as frameworks such as React and Flask. In my early days, I focused on building small projects and experimenting with various development tools and libraries. By taking on freelance projects, I also learned the importance of delivering high-quality, bug-free software in tight deadlines.
-          </p>
+          <BinaryText className="text-gray-300 leading-relaxed" delay={0} text="I discovered my passion for programming when I was just 14 years old. What started as a hobby soon turned into a full-fledged passion for web development and software engineering. Over the years, I honed my skills in languages like Python, Java, and C++, as well as frameworks such as React and Flask. In my early days, I focused on building small projects and experimenting with various development tools and libraries. By taking on freelance projects, I also learned the importance of delivering high-quality, bug-free software in tight deadlines." />
         </motion.div>
 
         {/* Present Card */}
@@ -66,9 +65,7 @@ const AboutSection = () => {
           className="rounded-lg p-6 bg-gradient-to-br from-red-800/20 to-transparent backdrop-blur-sm border border-orange-500/20 hover:border-red-500/40 transition-all duration-300"
         >
           <h3 className="text-2xl text-grey-500 mb-4">Present</h3>
-          <p className="text-gray-300 leading-relaxed">
-          Currently, I am pursuing my Bachelor's degree in Mechatronics Engineering at the University of Waterloo. I am also an Embedded Software Engineer intern at Tesla in Palo Alto, building SIL and HIL test harnesses and debugging CAN communication between vehicle ECUs.
-          </p>
+          <BinaryText className="text-gray-300 leading-relaxed" delay={400} text="Currently, I am pursuing my Bachelor's degree in Mechatronics Engineering at the University of Waterloo. I am also an Embedded Software Engineer intern at Tesla in Palo Alto, building SIL and HIL test harnesses and debugging CAN communication between vehicle ECUs." />
         </motion.div>
 
         {/* Future Card */}
@@ -81,9 +78,7 @@ const AboutSection = () => {
           className="rounded-lg p-6 bg-gradient-to-br from-orange-700/20 to-transparent backdrop-blur-sm border border-orange-500/20 hover:border-yellow-500/40 transition-all duration-300"
         >
           <h3 className="text-2xl text-orange-500 mb-4">Future</h3>
-          <p className="text-gray-300 leading-relaxed">
-            Looking ahead, I am excited about the vast opportunities that lie in the fields of software development, AI, and embedded systems. I am committed to advancing my technical expertise in these areas, especially machine learning, web development, and hardware integration. In the near future, I aspire to work with innovative companies on projects that push the boundaries of technology. I aim to contribute to cutting-edge software solutions, work on impactful AI applications, and leverage my skills in embedded systems to create practical, real-world technologies.
-          </p>
+          <BinaryText className="text-gray-300 leading-relaxed" delay={800} text="Looking ahead, I am excited about the vast opportunities that lie in the fields of software development, AI, and embedded systems. I am committed to advancing my technical expertise in these areas, especially machine learning, web development, and hardware integration. In the near future, I aspire to work with innovative companies on projects that push the boundaries of technology. I aim to contribute to cutting-edge software solutions, work on impactful AI applications, and leverage my skills in embedded systems to create practical, real-world technologies." />
         </motion.div>
       </div>
     </div>

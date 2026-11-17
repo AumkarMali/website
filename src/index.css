@@ -279,3 +279,20 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* BinaryText: a 0/1 drawn over the character, which keeps its width */
+.binary-char {
+  position: relative;
+}
+.binary-char.bin {
+  color: transparent;
+}
+.binary-char.bin::after {
+  content: attr(data-bin);
+  position: absolute;
+  inset: 0;
+  text-align: center;
+  color: #fb923c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-shadow: 0 0 6px rgba(249, 115, 22, 0.6);
+}
