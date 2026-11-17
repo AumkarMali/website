@@ -1,67 +1,137 @@
 import { useEffect, useRef, useState } from 'react';
-import { animate, motion, useInView, useMotionValue, useTransform } from 'framer-motion';
+import { motion, useInView, useReducedMotion } from 'framer-motion';
 import { expertise } from '../constants';
 import { SectionTitle } from './fx';
 
 // One series: one hue (validated on the dark card surface), 2px line, ~10% area wash,
 // 8px markers with a 2px surface ring, hairline solid grid, text in text tokens.
+// Motion: the filled shape ripples by at most WOBBLE points; the markers always sit on
+// the true score. Every SWAP_EVERY ms two axes (label + value) trade places.
 const SERIES = '#ea580c';
 const SURFACE = '#111827';
 const SIZE = 540;
 const C = SIZE / 2;
 const R = 150;
 const RINGS = [20, 40, 60, 80, 100];
+const SWAP_EVERY = 2000;
+const SWAP_MS = 1100;
+const GROW_MS = 1400;
+const WOBBLE = 3;
 
-const angle = (i, n) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
-const point = (i, n, value) => {
-  const a = angle(i, n);
+const slotAngle = (slot, n) => -Math.PI / 2 + (slot * 2 * Math.PI) / n;
+const polar = (slot, n, value) => {
+  const a = slotAngle(slot, n);
   const r = (R * value) / 100;
   return [C + r * Math.cos(a), C + r * Math.sin(a)];
 };
+const easeInOut = (k) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
+const easeOut = (k) => 1 - (1 - k) ** 3;
 
-const Marker = ({ i, n, value, progress, active, onEnter, onLeave }) => {
-  const cx = useTransform(progress, (t) => point(i, n, value * t)[0]);
-  const cy = useTransform(progress, (t) => point(i, n, value * t)[1]);
-  return (
-    <g>
-      <motion.circle cx={cx} cy={cy} r={active ? 7 : 5} fill={SERIES} stroke={SURFACE} strokeWidth={2} style={{ transition: 'r 0.2s' }} />
-      {/* hit target well beyond the painted mark */}
-      <motion.circle
-        cx={cx}
-        cy={cy}
-        r={16}
-        fill="transparent"
-        tabIndex={0}
-        role="img"
-        aria-label={`${expertise[i].axis}: ${value} out of 100`}
-        onPointerEnter={onEnter}
-        onPointerLeave={onLeave}
-        onFocus={onEnter}
-        onBlur={onLeave}
-        className="cursor-pointer outline-none"
-      />
-    </g>
-  );
+// Closed Catmull-Rom curve through the points, as cubic Beziers.
+const smoothClosed = (p) => {
+  const n = p.length;
+  let d = `M${p[0][0]},${p[0][1]}`;
+  for (let i = 0; i < n; i += 1) {
+    const p0 = p[(i - 1 + n) % n];
+    const p1 = p[i];
+    const p2 = p[(i + 1) % n];
+    const p3 = p[(i + 2) % n];
+    d += ` C${p1[0] + (p2[0] - p0[0]) / 6},${p1[1] + (p2[1] - p0[1]) / 6} ${p2[0] - (p3[0] - p1[0]) / 6},${p2[1] - (p3[1] - p1[1]) / 6} ${p2[0]},${p2[1]}`;
+  }
+  return `${d}Z`;
 };
 
 const SkillRadar = () => {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, amount: 0.4 });
-  const progress = useMotionValue(0);
+  const reduce = useReducedMotion();
   const [active, setActive] = useState(null);
+  const [tip, setTip] = useState(null);
   const n = expertise.length;
+
+  const blobRef = useRef(null);
+  const markerRefs = useRef([]);
+  const hitRefs = useRef([]);
+  const labelRefs = useRef([]);
+  // Each axis moves from slot `from` to slot `to`, starting at `start`.
+  const slots = useRef(expertise.map((_, i) => ({ from: i, to: i, start: 0 })));
+  const activeRef = useRef(null);
+  activeRef.current = active;
 
   useEffect(() => {
     if (!inView) return;
-    const controls = animate(progress, 1, { duration: 1.4, ease: [0.16, 1, 0.3, 1] });
-    return () => controls.stop();
-  }, [inView, progress]);
+    let raf;
+    const t0 = performance.now();
+    let lastSwap = t0 + GROW_MS;
 
-  const polygon = useTransform(progress, (t) =>
-    expertise.map((d, i) => point(i, n, d.score * t).join(',')).join(' ')
-  );
+    const slotNow = (s, now) => {
+      const k = Math.min(1, Math.max(0, (now - s.start) / SWAP_MS));
+      let d = s.to - s.from;
+      if (d > n / 2) d -= n; // go the short way round
+      if (d < -n / 2) d += n;
+      return s.from + d * easeInOut(k);
+    };
 
-  const tip = active === null ? null : point(active, n, expertise[active].score);
+    const swap = (now) => {
+      const a = Math.floor(Math.random() * n);
+      let b = Math.floor(Math.random() * (n - 1));
+      if (b >= a) b += 1;
+      const sa = slots.current[a];
+      const sb = slots.current[b];
+      const [ta, tb] = [sa.to, sb.to];
+      Object.assign(sa, { from: ta, to: tb, start: now });
+      Object.assign(sb, { from: tb, to: ta, start: now });
+      [a, b].forEach((i) => {
+        const el = labelRefs.current[i];
+        el?.classList.add('radar-swapping');
+        setTimeout(() => el?.classList.remove('radar-swapping'), SWAP_MS);
+      });
+    };
+
+    const frame = (now) => {
+      const grow = reduce ? 1 : easeOut(Math.min(1, (now - t0) / GROW_MS));
+      if (!reduce && now - lastSwap > SWAP_EVERY && activeRef.current === null) {
+        swap(now);
+        lastSwap = now;
+      }
+      const blob = [];
+      expertise.forEach((d, i) => {
+        const slot = slotNow(slots.current[i], now);
+        const [mx, my] = polar(slot, n, d.score * grow);
+        markerRefs.current[i]?.setAttribute('cx', mx);
+        markerRefs.current[i]?.setAttribute('cy', my);
+        hitRefs.current[i]?.setAttribute('cx', mx);
+        hitRefs.current[i]?.setAttribute('cy', my);
+
+        const ripple = reduce ? 0 : (WOBBLE * (Math.sin(now / 900 + i * 1.7) + 0.5 * Math.sin(now / 530 + i * 2.9))) / 1.5;
+        blob.push({ slot: ((slot % n) + n) % n, pt: polar(slot, n, Math.max(0, (d.score + ripple) * grow)) });
+
+        const [lx, ly] = polar(slot, n, 118);
+        const label = labelRefs.current[i];
+        if (label) {
+          label.setAttribute('x', lx);
+          label.setAttribute('y', ly);
+          label.setAttribute('text-anchor', Math.abs(lx - C) < 6 ? 'middle' : lx > C ? 'start' : 'end');
+        }
+      });
+      // Draw the shape in angular order so it never folds over itself mid-swap.
+      blob.sort((p, q) => p.slot - q.slot);
+      blobRef.current?.setAttribute('d', smoothClosed(blob.map((b) => b.pt)));
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [inView, reduce, n]);
+
+  const enter = (i) => {
+    setActive(i);
+    const m = markerRefs.current[i];
+    if (m) setTip([Number(m.getAttribute('cx')), Number(m.getAttribute('cy'))]);
+  };
+  const leave = () => {
+    setActive(null);
+    setTip(null);
+  };
 
   return (
     <section className="relative px-5 lg:px-20">
@@ -76,14 +146,14 @@ const SkillRadar = () => {
             {RINGS.map((v) => (
               <polygon
                 key={v}
-                points={expertise.map((_, i) => point(i, n, v).join(',')).join(' ')}
+                points={expertise.map((_, i) => polar(i, n, v).join(',')).join(' ')}
                 fill="none"
                 stroke="rgba(255,255,255,0.08)"
                 strokeWidth={1}
               />
             ))}
             {expertise.map((_, i) => {
-              const [x, y] = point(i, n, 100);
+              const [x, y] = polar(i, n, 100);
               return <line key={i} x1={C} y1={C} x2={x} y2={y} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />;
             })}
             {[50, 100].map((v) => (
@@ -92,19 +162,19 @@ const SkillRadar = () => {
               </text>
             ))}
 
-            <motion.polygon points={polygon} fill={SERIES} fillOpacity={0.12} stroke={SERIES} strokeWidth={2} strokeLinejoin="round" />
+            <path ref={blobRef} d="" fill={SERIES} fillOpacity={0.14} stroke={SERIES} strokeWidth={2} strokeLinejoin="round" />
 
             {expertise.map((d, i) => {
-              const [x, y] = point(i, n, 118);
-              const anchor = Math.abs(x - C) < 4 ? 'middle' : x > C ? 'start' : 'end';
+              const [x, y] = polar(i, n, 118);
               return (
                 <text
                   key={d.axis}
+                  ref={(el) => { labelRefs.current[i] = el; }}
                   x={x}
                   y={y}
-                  textAnchor={anchor}
+                  textAnchor={Math.abs(x - C) < 6 ? 'middle' : x > C ? 'start' : 'end'}
                   dominantBaseline="middle"
-                  className={`text-[13px] transition-colors ${active === i ? 'fill-white' : 'fill-gray-300'}`}
+                  className={`radar-label text-[13px] transition-colors ${active === i ? 'fill-white' : 'fill-gray-300'}`}
                 >
                   {d.short}
                 </text>
@@ -112,20 +182,38 @@ const SkillRadar = () => {
             })}
 
             {expertise.map((d, i) => (
-              <Marker
-                key={d.axis}
-                i={i}
-                n={n}
-                value={d.score}
-                progress={progress}
-                active={active === i}
-                onEnter={() => setActive(i)}
-                onLeave={() => setActive(null)}
-              />
+              <g key={d.axis}>
+                <circle
+                  ref={(el) => { markerRefs.current[i] = el; }}
+                  cx={C}
+                  cy={C}
+                  r={active === i ? 7 : 5}
+                  fill={SERIES}
+                  stroke={SURFACE}
+                  strokeWidth={2}
+                  style={{ transition: 'r 0.2s' }}
+                />
+                {/* hit target well beyond the painted mark */}
+                <circle
+                  ref={(el) => { hitRefs.current[i] = el; }}
+                  cx={C}
+                  cy={C}
+                  r={16}
+                  fill="transparent"
+                  tabIndex={0}
+                  role="img"
+                  aria-label={`${d.axis}: ${d.score} out of 100`}
+                  onPointerEnter={() => enter(i)}
+                  onPointerLeave={leave}
+                  onFocus={() => enter(i)}
+                  onBlur={leave}
+                  className="cursor-pointer outline-none"
+                />
+              </g>
             ))}
           </svg>
 
-          {tip && (
+          {tip && active !== null && (
             <div
               className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-[130%] rounded-lg border border-white/10 bg-black/90 px-3 py-2 text-left shadow-xl"
               style={{ left: `${(tip[0] / SIZE) * 100}%`, top: `${(tip[1] / SIZE) * 100}%` }}
@@ -144,8 +232,8 @@ const SkillRadar = () => {
           {expertise.map((d, i) => (
             <li
               key={d.axis}
-              onPointerEnter={() => setActive(i)}
-              onPointerLeave={() => setActive(null)}
+              onPointerEnter={() => enter(i)}
+              onPointerLeave={leave}
               className={`rounded-xl px-4 py-3 transition-colors ${active === i ? 'bg-black/5 dark:bg-white/5' : ''}`}
             >
               <div className="flex items-baseline justify-between gap-4">

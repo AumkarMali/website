@@ -306,3 +306,9 @@ html:not(.dark) .binary-char.bin::after {
   color: #ea580c;
   text-shadow: none;
 }
+
+/* Radar: the two axis labels that are trading places */
+.radar-label.radar-swapping {
+  fill: #fdba74;
+  font-weight: 600;
+}
