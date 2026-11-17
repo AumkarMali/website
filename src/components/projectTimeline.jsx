@@ -12,7 +12,7 @@ const VideoComponent = ({ src }) => (
     playsInline
     preload="none"
   >
-    <source src={src} type="video/webm" />
+    <source src={src} type={src.endsWith('.mp4') ? 'video/mp4' : 'video/webm'} />
     Your browser does not support the video tag.
   </video>
 );
@@ -111,6 +111,14 @@ const Projects = () => {
       videoSrc: "/assets/medicarm.webm",
       githubLink: "https://github.com/AumkarMali/MEDIC_Arm.git",
       alt: "MedicArm Project"
+    },
+    {
+      title: "Rescue Robot",
+      description: "A LEGO EV3 robot, built as the MTE 100/121 final project, that carries rescue cargo from three pickup points to three drop-off points along the shortest route. A C++ planner reads the six coordinates, uses depth-first search to list every route that alternates pickups and drop-offs, and keeps the shortest one. The RobotC program then drives each leg: it turns to the next heading with the gyro, drives an encoder-measured distance, confirms the stop when the colour sensor reads the same red or blue marker three times in a row, and lowers its lift and servo claw to grab or release the cargo. If it overshoots a marker, it turns around and returns to the previous point.",
+      technologies: ['C++', 'RobotC', 'LEGO EV3', 'Depth-First Search', 'Gyro & Colour Sensors'],
+      videoSrc: "/assets/rescuerobot.mp4",
+      githubLink: "https://github.com/AumkarMali/RescueRobot",
+      alt: "Rescue Robot Project"
     },
     {
       title: "BehaViewer",
