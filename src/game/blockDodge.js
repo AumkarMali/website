@@ -7,6 +7,7 @@
 // loaded bullets beside the player are only drawn. Arrow keys: the original stops both axes
 // whenever any arrow is released; here each axis follows the arrows still held (the most
 // recently pressed one wins), so releasing one arrow never stops another that is held.
+// Sniper bullets move 30% slower (SNIPER_SPEED).
 //
 // pygame behaviour reproduced here:
 // - pygame.draw.rect truncates float coordinates to int and returns the rect
@@ -20,6 +21,7 @@ export const WIDTH = 800;
 export const HEIGHT = 600;
 export const FPS = 60;
 const FIRE_EVERY = 9; // frames between shots while F is held: 0.15 s at 60 FPS
+const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
 
 const NAMED = {
   grey12: 'rgb(31,31,31)',
@@ -410,7 +412,7 @@ export function step(s, events, io) {
 
   if (levels >= 59 && s.cont === true) {
     s.enemy_accel3 += 0.07;
-    s.x_enemy3 += s.enemy_accel3;
+    s.x_enemy3 += s.enemy_accel3 * SNIPER_SPEED;
     s.Warn_goto = 0;
     s.bullet_types = 'Bullets: Normal, Shotgun, Sniper';
 
