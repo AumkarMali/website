@@ -1,6 +1,9 @@
 // Line-by-line port of Bullet_dodge.py (pygame, 800x600, 60 FPS).
 // One call to step() is one pass of the Python `while not crashed:` loop.
-// Variable names, statement order and quirks are kept as in the Python code.
+// Variable names, statement order and quirks are kept as in the Python code, except
+// shooting: the original fires one lower and one upper bullet per game; here every F
+// press fires a new bullet, alternating lower and upper, with no limit. A bullet that
+// hits something disappears, and the loaded bullets beside the player are only drawn.
 //
 // pygame behaviour reproduced here:
 // - pygame.draw.rect truncates float coordinates to int and returns the rect
@@ -97,28 +100,19 @@ export function createState() {
     final_score: 'GAME OVER',
     bullet_types: 'Bullets: Normal',
     death: 3,
-    x_sprite_bullet: 0,
-    y_sprite_bullet: 0,
-    x_sprite_bullet2: 0,
-    y_sprite_bullet2: 0,
-    fire: false, // Python starts these at 0; they are only compared with True/False
-    fire2: false,
-    count_b: 0,
+    shots: [], // fired bullets: {x, y, lower}
+    nextLower: true, // barrel for the next shot
     fade_in: 0,
     movement_y: 0,
     movement_x: 0,
     intro_timer: 0,
     count_init: 0,
-    new_x: 0,
+    new_x: 0, // loaded bullets, drawn beside the player
     new_y: 0,
     new_x2: 0,
     new_y2: 0,
-    const1: 0,
-    const2: 0,
     fast: 0,
     hits: false,
-    collision_det: false,
-    collision_det2: false,
     exited: false, // sys.exit() was reached
   };
 }
@@ -180,20 +174,10 @@ export function step(s, events, io) {
       if (event.key === 'down') s.accel_y = 0.2;
 
       if (event.key === 'f') {
-        s.count_b += 1;
-        if (s.x_sprite_bullet === s.new_x) {
-          sfx('fire');
-          s.const1 = s.y + 50 + s.y_change;
-        }
-        if (s.x_sprite_bullet2 === s.new_x2) {
-          sfx('fire');
-          s.const2 = s.y - 15 + s.y_change;
-        }
-        if (s.collision_det === true) s.count_b = 2;
-        if (s.collision_det2 === true) s.fire2 = true;
-
-        if (s.count_b % 1 === 0) s.fire = true;
-        if (s.count_b % 2 === 0) s.fire2 = true;
+        sfx('fire');
+        const lower = s.nextLower;
+        s.shots.push({ x: s.x + 10, y: lower ? s.y + 50 + s.y_change : s.y - 15 + s.y_change, lower });
+        s.nextLower = !lower;
       }
     } else if (event.type === 'keyup') {
       if (event.key === 'left' || event.key === 'right' || event.key === 'up' || event.key === 'down') {
@@ -203,27 +187,12 @@ export function step(s, events, io) {
     }
   }
 
-  if (s.fire === true) {
-    s.x_sprite_bullet -= 13;
-    s.y_sprite_bullet = s.const1;
-  }
-  if (s.fire === false) {
-    s.new_x = s.x + 10;
-    s.new_y = s.y + 50;
-    s.x_sprite_bullet = s.new_x;
-    s.y_sprite_bullet = s.new_y;
-  }
-
-  if (s.fire2 === true) {
-    s.x_sprite_bullet2 -= 13;
-    s.y_sprite_bullet2 = s.const2;
-  }
-  if (s.fire2 === false) {
-    s.new_x2 = s.x + 10;
-    s.new_y2 = s.y - 15;
-    s.x_sprite_bullet2 = s.new_x2;
-    s.y_sprite_bullet2 = s.new_y2;
-  }
+  for (const shot of s.shots) shot.x -= 13;
+  s.shots = s.shots.filter((shot) => shot.x > -60);
+  s.new_x = s.x + 10;
+  s.new_y = s.y + 50;
+  s.new_x2 = s.x + 10;
+  s.new_y2 = s.y - 15;
 
   music.volume(s.fade_in);
   s.fade_in += 0.0017;
@@ -286,13 +255,18 @@ export function step(s, events, io) {
   }
 
   const sprite = drawRect(ctx, s.player_color, s.x, s.y, 50, 50);
-  let sprite_bullet;
-  let sprite_bullet2;
-  if (s.collision_det === false) sprite_bullet = drawRect(ctx, [255, 223, 0], s.x_sprite_bullet, s.y_sprite_bullet, 3, 15);
-  if (s.collision_det === true) sprite_bullet = drawRect(ctx, [255, 223, 0], 0, 0, 3, 15);
-
-  if (s.collision_det2 === false) sprite_bullet2 = drawRect(ctx, grey12, s.x_sprite_bullet2, s.y_sprite_bullet2, 3, 15);
-  if (s.collision_det2 === true) sprite_bullet2 = drawRect(ctx, grey12, 0, 0, 3, 15);
+  drawRect(ctx, [255, 223, 0], s.new_x, s.new_y, 3, 15); // loaded lower bullet
+  const shotRects = s.shots.map((shot) =>
+    drawRect(ctx, shot.lower ? [255, 223, 0] : grey12, shot.x, shot.y, 3, 15)
+  );
+  // A shot that hits an enemy bullet is spent; one shot per enemy per frame.
+  const spent = new Set();
+  const shotHits = (enemy) => {
+    const k = shotRects.findIndex((r, idx) => !spent.has(idx) && collide(enemy, r));
+    if (k < 0) return false;
+    spent.add(k);
+    return true;
+  };
 
   const bullet = drawRect(ctx, s.color, s.x_enemy, s.rand, s.bulletW, s.bulletH);
   const bullet2 = drawRect(ctx, s.color2, s.x_enemy2, s.rand2, 20, 15);
@@ -350,7 +324,7 @@ export function step(s, events, io) {
     sfx('ricochet');
     s.hits = true;
   }
-  if (collide(bullet, sprite_bullet) && s.cont === true) {
+  if (s.cont === true && shotHits(bullet)) {
     const gen = rng.randrange(-50, 50);
     s.rand = s.y + gen;
     if (s.y >= 520) s.rand -= 30;
@@ -358,17 +332,6 @@ export function step(s, events, io) {
     sfx('hit');
     s.x_enemy = 0;
     s.score += 2;
-    s.collision_det = true;
-  }
-  if (collide(bullet, sprite_bullet2) && s.cont === true) {
-    const gen = rng.randrange(-50, 50);
-    s.rand = s.y + gen;
-    if (s.y >= 520) s.rand -= 30;
-    if (s.y <= 60) s.rand += 30;
-    sfx('hit');
-    s.score += 2;
-    s.x_enemy = 0;
-    s.collision_det2 = true;
   }
 
   if (levels >= 30 && s.cont === true) {
@@ -391,19 +354,11 @@ export function step(s, events, io) {
       sfx('ricochet');
       s.hits = true;
     }
-    if (collide(bullet2, sprite_bullet)) {
+    if (shotHits(bullet2)) {
       s.x_enemy2 = 0;
       s.x_change += 40;
       s.rand2 = rng.randint(30, 540);
       sfx('hit');
-      s.collision_det = true;
-    }
-    if (collide(bullet2, sprite_bullet2)) {
-      s.x_enemy2 = 0;
-      s.x_change += 40;
-      s.rand2 = rng.randint(30, 540);
-      sfx('hit');
-      s.collision_det2 = true;
     }
 
     if (collide(bullet21, wall1)) {
@@ -420,17 +375,10 @@ export function step(s, events, io) {
       sfx('ricochet');
       s.hits = true;
     }
-    if (collide(bullet21, sprite_bullet)) {
+    if (shotHits(bullet21)) {
       s.x_enemy21 = 780;
       s.rand21 = rng.randint(30, 540);
       sfx('hit');
-      s.collision_det = true;
-    }
-    if (collide(bullet21, sprite_bullet2)) {
-      s.x_enemy21 = 780;
-      s.rand21 = rng.randint(30, 540);
-      sfx('hit');
-      s.collision_det2 = true;
     }
   }
 
@@ -457,17 +405,10 @@ export function step(s, events, io) {
       sfx('ricochet');
       s.hits = true;
     }
-    if (collide(bullet3, sprite_bullet)) {
+    if (shotHits(bullet3)) {
       s.rand3 = s.x_warn + 11;
       s.x_enemy3 = 0;
       sfx('hit');
-      s.collision_det = true;
-    }
-    if (collide(bullet3, sprite_bullet2)) {
-      s.rand3 = s.x_warn + 11;
-      s.x_enemy3 = 0;
-      sfx('hit');
-      s.collision_det2 = true;
     }
   }
 
@@ -514,8 +455,9 @@ export function step(s, events, io) {
     blit(ctx, images.heart, 500, 2);
   }
 
-  if (s.collision_det === false) blit(ctx, images.bullet, s.x_sprite_bullet - 5, s.y_sprite_bullet - 1);
-  if (s.collision_det2 === false) blit(ctx, images.bullet, s.x_sprite_bullet2 - 5, s.y_sprite_bullet2 - 1);
+  blit(ctx, images.bullet, s.new_x - 5, s.new_y - 1); // loaded bullets
+  blit(ctx, images.bullet, s.new_x2 - 5, s.new_y2 - 1);
+  for (const shot of s.shots) blit(ctx, images.bullet, shot.x - 5, shot.y - 1);
 
   if (s.hits === true) {
     s.fast += 1;
@@ -529,5 +471,6 @@ export function step(s, events, io) {
     }
   }
 
+  s.shots = s.shots.filter((_, idx) => !spent.has(idx));
   return true; // pygame.display.update()
 }

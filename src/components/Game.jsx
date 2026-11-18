@@ -251,7 +251,7 @@ const Game = ({ onClose }) => {
         </div>
       ) : (
         <p className="text-center text-sm text-white/60">
-          Press <kbd className="kbd">← ↑ ↓ →</kbd> to move around · press <kbd className="kbd">F</kbd> to shoot one bullet at a time ·{' '}
+          Press <kbd className="kbd">← ↑ ↓ →</kbd> to move around · press <kbd className="kbd">F</kbd> to fire (unlimited bullets) ·{' '}
           <kbd className="kbd">Esc</kbd> to close
         </p>
       )}
