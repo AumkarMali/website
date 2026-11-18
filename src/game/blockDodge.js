@@ -2,8 +2,9 @@
 // One call to step() is one pass of the Python `while not crashed:` loop.
 // Variable names, statement order and quirks are kept as in the Python code, except
 // shooting: the original fires one lower and one upper bullet per game; here every F
-// press fires a new bullet, alternating lower and upper, with no limit. A bullet that
-// hits something disappears, and the loaded bullets beside the player are only drawn.
+// press fires a new bullet, alternating lower and upper, with no limit, and holding F
+// keeps firing every FIRE_EVERY frames. A bullet that hits something disappears, and the
+// loaded bullets beside the player are only drawn.
 //
 // pygame behaviour reproduced here:
 // - pygame.draw.rect truncates float coordinates to int and returns the rect
@@ -16,6 +17,7 @@
 export const WIDTH = 800;
 export const HEIGHT = 600;
 export const FPS = 60;
+const FIRE_EVERY = 3; // frames between shots while F is held: 0.05 s at 60 FPS
 
 const NAMED = {
   grey12: 'rgb(31,31,31)',
@@ -102,6 +104,9 @@ export function createState() {
     death: 3,
     shots: [], // fired bullets: {x, y, lower}
     nextLower: true, // barrel for the next shot
+    fHeld: false,
+    fireTimer: 0, // frames until the next held-F shot
+    firedThisFrame: false,
     fade_in: 0,
     movement_y: 0,
     movement_x: 0,
@@ -115,6 +120,16 @@ export function createState() {
     hits: false,
     exited: false, // sys.exit() was reached
   };
+}
+
+// One bullet from the next barrel (the y offsets are the original const1/const2).
+function fire(s, sfx) {
+  sfx('fire');
+  const lower = s.nextLower;
+  s.shots.push({ x: s.x + 10, y: lower ? s.y + 50 + s.y_change : s.y - 15 + s.y_change, lower });
+  s.nextLower = !lower;
+  s.fireTimer = FIRE_EVERY;
+  s.firedThisFrame = true;
 }
 
 // pygame.draw.rect(display, color, (x, y, w, h)) -> Rect
@@ -174,19 +189,23 @@ export function step(s, events, io) {
       if (event.key === 'down') s.accel_y = 0.2;
 
       if (event.key === 'f') {
-        sfx('fire');
-        const lower = s.nextLower;
-        s.shots.push({ x: s.x + 10, y: lower ? s.y + 50 + s.y_change : s.y - 15 + s.y_change, lower });
-        s.nextLower = !lower;
+        s.fHeld = true;
+        fire(s, sfx);
       }
     } else if (event.type === 'keyup') {
       if (event.key === 'left' || event.key === 'right' || event.key === 'up' || event.key === 'down') {
         s.accel_x = 0;
         s.accel_y = 0;
       }
+      if (event.key === 'f') s.fHeld = false;
     }
   }
 
+  if (s.fHeld && !s.firedThisFrame) {
+    s.fireTimer -= 1;
+    if (s.fireTimer <= 0) fire(s, sfx);
+  }
+  s.firedThisFrame = false;
   for (const shot of s.shots) shot.x -= 13;
   s.shots = s.shots.filter((shot) => shot.x > -60);
   s.new_x = s.x + 10;
