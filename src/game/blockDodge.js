@@ -4,7 +4,9 @@
 // shooting: the original fires one lower and one upper bullet per game; here every F
 // press fires a new bullet, alternating lower and upper, with no limit, and holding F
 // keeps firing every FIRE_EVERY frames. A bullet that hits something disappears, and the
-// loaded bullets beside the player are only drawn.
+// loaded bullets beside the player are only drawn. Arrow keys: the original stops both axes
+// whenever any arrow is released; here each axis follows the arrows still held (the most
+// recently pressed one wins), so releasing one arrow never stops another that is held.
 //
 // pygame behaviour reproduced here:
 // - pygame.draw.rect truncates float coordinates to int and returns the rect
@@ -17,7 +19,7 @@
 export const WIDTH = 800;
 export const HEIGHT = 600;
 export const FPS = 60;
-const FIRE_EVERY = 3; // frames between shots while F is held: 0.05 s at 60 FPS
+const FIRE_EVERY = 9; // frames between shots while F is held: 0.15 s at 60 FPS
 
 const NAMED = {
   grey12: 'rgb(31,31,31)',
@@ -105,6 +107,8 @@ export function createState() {
     shots: [], // fired bullets: {x, y, lower}
     nextLower: true, // barrel for the next shot
     fHeld: false,
+    arrows: { left: 0, right: 0, up: 0, down: 0 }, // press order of held arrows, 0 = up
+    arrowSeq: 0,
     fireTimer: 0, // frames until the next held-F shot
     firedThisFrame: false,
     fade_in: 0,
@@ -183,6 +187,7 @@ export function step(s, events, io) {
 
   for (const event of events) {
     if (event.type === 'keydown') {
+      if (event.key in s.arrows) s.arrows[event.key] = ++s.arrowSeq;
       if (event.key === 'left') s.accel_x = -0.2;
       if (event.key === 'right') s.accel_x = 0.2;
       if (event.key === 'up') s.accel_y = -0.2;
@@ -193,9 +198,11 @@ export function step(s, events, io) {
         fire(s, sfx);
       }
     } else if (event.type === 'keyup') {
-      if (event.key === 'left' || event.key === 'right' || event.key === 'up' || event.key === 'down') {
-        s.accel_x = 0;
-        s.accel_y = 0;
+      if (event.key in s.arrows) {
+        s.arrows[event.key] = 0;
+        const { left, right, up, down } = s.arrows;
+        s.accel_x = left || right ? (left > right ? -0.2 : 0.2) : 0;
+        s.accel_y = up || down ? (up > down ? -0.2 : 0.2) : 0;
       }
       if (event.key === 'f') s.fHeld = false;
     }

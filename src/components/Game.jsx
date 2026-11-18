@@ -6,6 +6,9 @@ import { createState, step, FPS, WIDTH, HEIGHT } from '../game/blockDodge';
 
 const SOUNDS = ['countdown', 'bounce', 'fire', 'hit', 'ricochet', 'outro'];
 const MAX_CHANNELS = 8; // pygame.mixer default; Sound.play() is silent when all are busy
+// fire.mp3 is 1.9 s: 0.27 s of silence, the bang, then a long tail. Rapid fire plays only
+// the bang, outside the channel pool, so shots are instant and don't pile up.
+const FIRE_CLIP = { offset: 0.26, length: 0.18, fade: 0.05 };
 const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', KeyF: 'f' };
 
 function createAudio() {
@@ -51,6 +54,20 @@ function createAudio() {
     resume: () => ac.resume().catch(() => {}),
     sfx(name) {
       const buf = buffers[name];
+      if (name === 'fire') {
+        if (!buf) return;
+        const src = ac.createBufferSource();
+        const gain = ac.createGain();
+        const t = ac.currentTime;
+        const { offset, length, fade } = FIRE_CLIP;
+        gain.gain.setValueAtTime(1, t);
+        gain.gain.setValueAtTime(1, t + length - fade);
+        gain.gain.linearRampToValueAtTime(0, t + length);
+        src.buffer = buf;
+        src.connect(gain).connect(ac.destination);
+        src.start(t, offset, length);
+        return;
+      }
       if (!buf || active.size >= MAX_CHANNELS) return;
       const src = ac.createBufferSource();
       src.buffer = buf;
@@ -137,7 +154,10 @@ const Game = ({ onClose }) => {
       const key = KEYS[e.code];
       if (!key) return;
       e.preventDefault();
-      if (!e.repeat) press(key);
+      if (!e.repeat) {
+        held.current.delete(key); // a real press always counts, even if a key-up was missed
+        press(key);
+      }
     };
     const up = (e) => {
       const key = KEYS[e.code];
