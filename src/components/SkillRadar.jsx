@@ -5,8 +5,9 @@ import { SectionTitle } from './fx';
 
 // One series: one hue (validated on the dark card surface), 2px line, ~10% area wash,
 // 8px markers with a 2px surface ring, hairline solid grid, text in text tokens.
-// Motion: the filled shape ripples by at most WOBBLE points; the markers always sit on
-// the true score. Every SWAP_EVERY ms two axes (label + value) trade places.
+// Motion: every SWAP_EVERY ms two axes (label + value) trade places. While they move the
+// filled shape turns into a blob that ripples by at most WOBBLE points; once they settle it
+// morphs back to the straight-edged polygon. The markers always sit on the true score.
 const SERIES = '#ea580c';
 const SURFACE = '#111827';
 const SIZE = 540;
@@ -17,6 +18,8 @@ const SWAP_EVERY = 2000;
 const SWAP_MS = 1100;
 const GROW_MS = 1400;
 const WOBBLE = 3;
+const MORPH_IN = 250; // polygon -> blob as a swap starts
+const MORPH_OUT = 450; // blob -> polygon after the swap settles
 
 const slotAngle = (slot, n) => -Math.PI / 2 + (slot * 2 * Math.PI) / n;
 const polar = (slot, n, value) => {
@@ -27,8 +30,9 @@ const polar = (slot, n, value) => {
 const easeInOut = (k) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
 const easeOut = (k) => 1 - (1 - k) ** 3;
 
-// Closed Catmull-Rom curve through the points, as cubic Beziers.
-const smoothClosed = (p) => {
+// Closed Catmull-Rom curve through the points, as cubic Beziers. k scales the handles:
+// 0 gives straight edges (the polygon), 1 the smooth blob.
+const smoothClosed = (p, k = 1) => {
   const n = p.length;
   let d = `M${p[0][0]},${p[0][1]}`;
   for (let i = 0; i < n; i += 1) {
@@ -36,7 +40,8 @@ const smoothClosed = (p) => {
     const p1 = p[i];
     const p2 = p[(i + 1) % n];
     const p3 = p[(i + 2) % n];
-    d += ` C${p1[0] + (p2[0] - p0[0]) / 6},${p1[1] + (p2[1] - p0[1]) / 6} ${p2[0] - (p3[0] - p1[0]) / 6},${p2[1] - (p3[1] - p1[1]) / 6} ${p2[0]},${p2[1]}`;
+    const h = k / 6;
+    d += ` C${p1[0] + (p2[0] - p0[0]) * h},${p1[1] + (p2[1] - p0[1]) * h} ${p2[0] - (p3[0] - p1[0]) * h},${p2[1] - (p3[1] - p1[1]) * h} ${p2[0]},${p2[1]}`;
   }
   return `${d}Z`;
 };
@@ -94,6 +99,14 @@ const SkillRadar = () => {
         swap(now);
         lastSwap = now;
       }
+      const since = now - lastSwap;
+      let blobness = 0;
+      if (!reduce && since >= 0) {
+        if (since < MORPH_IN) blobness = since / MORPH_IN;
+        else if (since < SWAP_MS) blobness = 1;
+        else if (since < SWAP_MS + MORPH_OUT) blobness = 1 - (since - SWAP_MS) / MORPH_OUT;
+        blobness = easeInOut(blobness);
+      }
       const blob = [];
       expertise.forEach((d, i) => {
         const slot = slotNow(slots.current[i], now);
@@ -103,7 +116,7 @@ const SkillRadar = () => {
         hitRefs.current[i]?.setAttribute('cx', mx);
         hitRefs.current[i]?.setAttribute('cy', my);
 
-        const ripple = reduce ? 0 : (WOBBLE * (Math.sin(now / 900 + i * 1.7) + 0.5 * Math.sin(now / 530 + i * 2.9))) / 1.5;
+        const ripple = (blobness * WOBBLE * (Math.sin(now / 900 + i * 1.7) + 0.5 * Math.sin(now / 530 + i * 2.9))) / 1.5;
         blob.push({ slot: ((slot % n) + n) % n, pt: polar(slot, n, Math.max(0, (d.score + ripple) * grow)) });
 
         const [lx, ly] = polar(slot, n, 118);
@@ -116,7 +129,7 @@ const SkillRadar = () => {
       });
       // Draw the shape in angular order so it never folds over itself mid-swap.
       blob.sort((p, q) => p.slot - q.slot);
-      blobRef.current?.setAttribute('d', smoothClosed(blob.map((b) => b.pt)));
+      blobRef.current?.setAttribute('d', smoothClosed(blob.map((b) => b.pt), blobness));
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
