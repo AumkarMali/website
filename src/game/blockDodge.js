@@ -23,6 +23,8 @@ export const WIDTH = 800;
 export const HEIGHT = 600;
 export const FPS = 60;
 const FIRE_EVERY = 9; // frames between shots while F is held: 0.15 s at 60 FPS
+const KICK_FRAMES = 8; // loaded-bullet recoil animation after each shot
+const KICK_DIST = 7; // px the loaded bullets jump back
 const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
 // Power-up: every time any player reaches a multiple of 50 points, a random icon appears at
 // a random spot: 10 s of 2x speed, 10 s of 2x fire rate, 10 s of half-speed enemy bullets,
@@ -151,6 +153,7 @@ export function createState(ultType = 'world') {
     arrows: { left: 0, right: 0, up: 0, down: 0 }, // press order of held arrows, 0 = up
     arrowSeq: 0,
     fireTimer: 0, // frames until the next held-F shot
+    kick: 0, // frames of loaded-bullet recoil left
     powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
     powerups: [], // { id, x, y, ttl, type } icons lying on the map
     explosions: [], // { x, y, ttl } yellow bursts when a shot destroys an enemy bullet
@@ -492,6 +495,7 @@ function knock(s, cap) {
 // One bullet from the next barrel (the y offsets are the original const1/const2).
 function fire(s, sfx) {
   sfx('fire');
+  s.kick = KICK_FRAMES; // the loaded bullets kick back
   const lower = s.nextLower;
   s.shots.push({ x: s.x + 10, y: lower ? s.y + 50 + s.y_change : s.y - 15 + s.y_change, lower });
   s.nextLower = !lower;
@@ -769,9 +773,11 @@ export function step(s, events, io) {
   s.firedThisFrame = false;
   if (!frozen) for (const shot of s.shots) shot.x -= 13 * selfScale;
   s.shots = s.shots.filter((shot) => shot.x > -60);
-  s.new_x = s.x + 10;
+  if (!frozen && s.kick > 0) s.kick -= 1;
+  const kickOffset = (s.kick / KICK_FRAMES) * KICK_DIST;
+  s.new_x = s.x + 10 + kickOffset;
   s.new_y = s.y + 50;
-  s.new_x2 = s.x + 10;
+  s.new_x2 = s.x + 10 + kickOffset;
   s.new_y2 = s.y - 15;
 
   music.volume(s.fade_in);
@@ -1284,18 +1290,6 @@ export function step(s, events, io) {
   // Same hearts as the original, capped at MAX_LIVES by the life power-up.
   const gap = 45;
   for (let h = 0; h < s.death; h += 1) blit(ctx, images.heart, 500 + h * gap, 2);
-
-  // In multiplayer, show your own heart count in the middle of your square too.
-  if (ctx && io.online?.()) {
-    const cx = s.x + 25;
-    const cy = s.y + 25;
-    if (images.heart) {
-      ctx.drawImage(images.heart, cx - 9, cy - 18, 18, 17);
-      text(ctx, 'bold 18px Arial, sans-serif', String(s.death), [255, 255, 255], cx, cy + 8);
-    } else {
-      text(ctx, 'bold 20px Arial, sans-serif', String(s.death), [255, 255, 255], cx, cy);
-    }
-  }
 
   blit(ctx, images.bullet, s.new_x - 5, s.new_y - 1); // loaded bullets
   blit(ctx, images.bullet, s.new_x2 - 5, s.new_y2 - 1);
