@@ -70,6 +70,7 @@ export function connect(name, onCount) {
   let worldFrom = null; // host id of pendingWorld
   const events = [];
   const booms = []; // explosions from other players' Killer Queen shots
+  const ultSounds = []; // other players' Killer Queen / D4C activation clips
   const pickups = []; // host: power-up ids other players took since last frame
   const ultRequests = []; // host: player ids who pressed T since last frame
   const eraseRequests = []; // host: King Crimson users who pressed T again to cancel
@@ -119,6 +120,9 @@ export function connect(name, onCount) {
     })
     .on('broadcast', { event: 'boom' }, ({ payload: p }) => {
       if (typeof p?.x === 'number' && typeof p?.y === 'number') booms.push({ x: p.x, y: p.y, big: !!p.big });
+    })
+    .on('broadcast', { event: 'ultsound' }, ({ payload: p }) => {
+      if (p?.type === 'killer' || p?.type === 'd4c') ultSounds.push(p.type);
     })
     .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
       if (p?.from && isHost()) ultRequests.push({ id: p.from, type: p.type });
@@ -231,6 +235,15 @@ export function connect(name, onCount) {
 
     takeBooms() {
       return booms.splice(0);
+    },
+
+    takeUltSounds() {
+      return ultSounds.splice(0);
+    },
+
+    sendUltSound(type) {
+      if (!synced) return;
+      channel.send({ type: 'broadcast', event: 'ultsound', payload: { from: id, type } });
     },
 
     sendBoom(x, y, big) {

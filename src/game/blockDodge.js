@@ -50,6 +50,7 @@ const KING_FX_FRAMES = 60; // ripple runs for 1 s, then the red shade takes over
 export const KILLER_FRAMES = 10 * 60; // Killer Queen: 10 s of blast-radius shots
 const KILLER_RADIUS = 140; // px destroyed around each shot hit
 export const D4C_FRAMES = 10 * 60; // D4C: 10 s where enemy bullets never aim at you
+const D4C_COOLDOWN = 20 * 60; // D4C's reuse gap is 20 s instead of the usual 30 s
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
@@ -153,7 +154,8 @@ export function createState(ultType = 'world') {
     arrows: { left: 0, right: 0, up: 0, down: 0 }, // press order of held arrows, 0 = up
     arrowSeq: 0,
     fireTimer: 0, // frames until the next held-F shot
-    kick: 0, // frames of loaded-bullet recoil left
+    kickLower: 0, // frames of lower-barrel recoil left
+    kickUpper: 0, // frames of upper-barrel recoil left
     powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
     powerups: [], // { id, x, y, ttl, type } icons lying on the map
     explosions: [], // { x, y, ttl } yellow bursts when a shot destroys an enemy bullet
@@ -407,8 +409,11 @@ function tryUlt(s, io, frozen) {
   if (s.ultType === 'killer' && hasBuff(s.killerBuffs, selfId)) return;
   if (s.ultType === 'd4c' && hasBuff(s.d4cBuffs, selfId)) return;
   if (s.ultType === 'king') saveKingSnapshot(s); // rollback point for the erase
-  s.ultCooldown = ULT_COOLDOWN;
-  if (s.ultType === 'killer' || s.ultType === 'd4c') io.sfx?.(s.ultType); // personal clip
+  s.ultCooldown = s.ultType === 'd4c' ? D4C_COOLDOWN : ULT_COOLDOWN;
+  if (s.ultType === 'killer' || s.ultType === 'd4c') {
+    io.sfx?.(s.ultType); // local activation clip
+    io.sendUltSound?.(s.ultType); // and the same clip on everyone else's screen
+  }
   if (io.startUlt?.(s, s.ultType)) return; // host took over, or a guest asked the host
   if (s.ultType === 'd4c') addBuff(s.d4cBuffs, selfId, D4C_FRAMES);
   else if (s.ultType === 'killer') addBuff(s.killerBuffs, selfId, KILLER_FRAMES);
@@ -495,9 +500,10 @@ function knock(s, cap) {
 // One bullet from the next barrel (the y offsets are the original const1/const2).
 function fire(s, sfx) {
   sfx('fire');
-  s.kick = KICK_FRAMES; // the loaded bullets kick back
   const lower = s.nextLower;
   s.shots.push({ x: s.x + 10, y: lower ? s.y + 50 + s.y_change : s.y - 15 + s.y_change, lower });
+  if (lower) s.kickLower = KICK_FRAMES; // only the barrel that fired kicks back
+  else s.kickUpper = KICK_FRAMES;
   s.nextLower = !lower;
   s.fireTimer = FIRE_EVERY;
   s.firedThisFrame = true;
@@ -607,7 +613,7 @@ export function drawUltOverlay(ctx, s) {
  * @param events  [{type: 'keydown'|'keyup', key: 'left'|'right'|'up'|'down'|'f'|'t'}] for this frame
  * @param io      { ctx?, images?: {heart, bullet}, rng, sfx?(name), music?: {play(), stop(), volume(v)},
  *                  isUlter?(s), isSlowUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), online?(), ownsWorld?(),
- *                  takeBooms?(), sendBoom?(x, y, big) }
+ *                  takeBooms?(), sendBoom?(x, y, big), takeUltSounds?(), sendUltSound?(type) }
  */
 export function step(s, events, io) {
   const { ctx = null, images = {}, rng = mathRandomRng } = io;
@@ -638,7 +644,9 @@ export function step(s, events, io) {
       size: big ? KILLER_RADIUS : 25,
     });
   }
+  const incomingUltSounds = io.takeUltSounds?.() ?? [];
   const sfx = io.sfx || (() => {});
+  for (const type of incomingUltSounds) sfx(type);
   const music = io.music || { play() {}, stop() {}, volume() {} };
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
@@ -773,11 +781,15 @@ export function step(s, events, io) {
   s.firedThisFrame = false;
   if (!frozen) for (const shot of s.shots) shot.x -= 13 * selfScale;
   s.shots = s.shots.filter((shot) => shot.x > -60);
-  if (!frozen && s.kick > 0) s.kick -= 1;
-  const kickOffset = (s.kick / KICK_FRAMES) * KICK_DIST;
-  s.new_x = s.x + 10 + kickOffset;
+  if (!frozen) {
+    if (s.kickLower > 0) s.kickLower -= 1;
+    if (s.kickUpper > 0) s.kickUpper -= 1;
+  }
+  const kickLower = (s.kickLower / KICK_FRAMES) * KICK_DIST;
+  const kickUpper = (s.kickUpper / KICK_FRAMES) * KICK_DIST;
+  s.new_x = s.x + 10 + kickLower;
   s.new_y = s.y + 50;
-  s.new_x2 = s.x + 10 + kickOffset;
+  s.new_x2 = s.x + 10 + kickUpper;
   s.new_y2 = s.y - 15;
 
   music.volume(s.fade_in);
