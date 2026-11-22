@@ -218,6 +218,8 @@ const Game = ({ onClose }) => {
         takeEvents: () => mp?.takeEvents() ?? [],
         takeGameOver: () => mp?.takeGameOver() ?? false,
         report: (b) => mp?.report(b),
+        reportPickup: (powerupId) => mp?.reportPickup(powerupId),
+        ownsWorld: () => !mp || mp.isHost(),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
       };
       if (MULTIPLAYER) {

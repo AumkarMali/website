@@ -22,15 +22,16 @@ export const HEIGHT = 600;
 export const FPS = 60;
 const FIRE_EVERY = 9; // frames between shots while F is held: 0.15 s at 60 FPS
 const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
-// Power-up: each multiple of 50 points drops a random icon at a random spot: 10 s of 2x
-// speed, 10 s of 2x fire rate, or an extra life (up to MAX_LIVES).
+// Power-up: every time any player reaches a multiple of 50 points, a random icon appears at
+// a random spot: 10 s of 2x speed, 10 s of 2x fire rate, or an extra life (up to MAX_LIVES).
+// Icons stay on the field until someone picks them up or the 50 s lifetime runs out.
 const POWERUP_EVERY = 50;
-const POWERUP_FRAMES = 10 * 60; // icon disappears if not picked up in 10 s
+const POWERUP_FRAMES = 50 * 60; // icon disappears after 50 s if nobody picks it up
 const POWERUP_SIZE = 30;
 const BOOST_FRAMES = 10 * 60;
 const BOOST = 2;
 const POWERUP_TYPES = ['speed', 'fire', 'life'];
-const MAX_LIVES = 4;
+const MAX_LIVES = 3;
 // After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
 // can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
 const KNOCK_FRAMES = 15;
@@ -126,7 +127,7 @@ export function createState() {
     arrowSeq: 0,
     fireTimer: 0, // frames until the next held-F shot
     powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
-    powerup: null, // { x, y, ttl } while an icon is on the map
+    powerups: [], // { id, x, y, ttl, type } icons lying on the map
     speedBoost: 0, // frames of 2x speed left
     fireBoost: 0, // frames of 2x fire rate left
     knock: 0, // frames of knockback speed limit left
@@ -154,7 +155,7 @@ export const WORLD_KEYS = [
   'x_enemy', 'rand', 'color', 'enemy_accel', 'bulletW', 'bulletH',
   'x_enemy2', 'rand2', 'x_enemy21', 'rand21', 'color2', 'color21', 'enemy_accel2',
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
-  'timer', 'count', 'count_init', 'intro_timer', 'bullet_types',
+  'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -234,6 +235,19 @@ function drawPowerup(ctx, p, images = {}) {
     }
   }
   ctx.restore();
+}
+
+// Drops one random icon at a random spot. The id lets a pickup on one screen remove the same
+// icon from everyone else's map.
+export function spawnPowerup(s, rng = Math.random) {
+  const id = `${Date.now().toString(36)}-${Math.floor(rng() * 1e9).toString(36)}`;
+  s.powerups.push({
+    id,
+    x: 40 + rng() * (WIDTH - 80 - POWERUP_SIZE),
+    y: 60 + rng() * (HEIGHT - 100 - POWERUP_SIZE),
+    ttl: POWERUP_FRAMES,
+    type: POWERUP_TYPES[Math.floor(rng() * POWERUP_TYPES.length)],
+  });
 }
 
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
@@ -413,21 +427,22 @@ export function step(s, events, io) {
   }
 
   const sprite = drawRect(ctx, s.player_color, s.x, s.y, 50, 50);
-  if (s.powerup) {
-    const p = s.powerup;
+  const leftOnMap = [];
+  for (const p of s.powerups) {
     p.ttl -= 1;
-    if (collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE }) && s.cont) {
+    if (s.cont && collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
       if (p.type === 'speed') s.speedBoost = BOOST_FRAMES;
       else if (p.type === 'fire') s.fireBoost = BOOST_FRAMES;
       else s.lives = Math.min(MAX_LIVES, s.lives + 1);
-      s.powerup = null;
+      io.reportPickup?.(p.id);
       sfx('bounce');
-    } else if (p.ttl <= 0) {
-      s.powerup = null;
-    } else if (ctx) {
-      drawPowerup(ctx, p, images);
+      continue;
     }
+    if (p.ttl <= 0) continue;
+    if (ctx) drawPowerup(ctx, p, images);
+    leftOnMap.push(p);
   }
+  s.powerups = leftOnMap;
   drawRect(ctx, [255, 223, 0], s.new_x, s.new_y, 3, 15); // loaded lower bullet
   const shotRects = s.shots.map((shot) =>
     drawRect(ctx, shot.lower ? [255, 223, 0] : grey12, shot.x, shot.y, 3, 15)
@@ -592,16 +607,16 @@ export function step(s, events, io) {
     }
   }
 
-  // a new multiple of 50 points drops a power-up somewhere on the map
+  // every multiple of 50 points adds an icon to the shared map; only the host (or a single
+  // player) creates them, but every player tracks the level so joining the host role later
+  // doesn't drop a backlog of icons
   const level = Math.floor(s.score / POWERUP_EVERY);
-  if (level > s.powerupLevel && s.cont) {
+  if (level > s.powerupLevel) {
+    const earned = level - s.powerupLevel;
     s.powerupLevel = level;
-    s.powerup = {
-      x: 40 + Math.random() * (WIDTH - 80 - POWERUP_SIZE),
-      y: 60 + Math.random() * (HEIGHT - 100 - POWERUP_SIZE),
-      ttl: POWERUP_FRAMES,
-      type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)],
-    };
+    if (s.cont && (io.ownsWorld ? io.ownsWorld() : true)) {
+      for (let i = 0; i < earned; i += 1) spawnPowerup(s);
+    }
   }
   if (ctx && s.cont) {
     let hudY = 580;
@@ -646,8 +661,8 @@ export function step(s, events, io) {
     s.final_score = 'Final score: ' + Math.trunc(s.score);
   }
 
-  // Same hearts as the original; a 4th (extra life) packs them a little closer.
-  const gap = s.death > 3 ? 34 : 45;
+  // Same hearts as the original, capped at MAX_LIVES by the life power-up.
+  const gap = 45;
   for (let h = 0; h < s.death; h += 1) blit(ctx, images.heart, 500 + h * gap, 2);
 
   blit(ctx, images.bullet, s.new_x - 5, s.new_y - 1); // loaded bullets

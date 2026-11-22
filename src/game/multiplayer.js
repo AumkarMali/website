@@ -5,11 +5,13 @@
 // others adopt them. When a guest is hit by, or shoots down, an enemy bullet it tells the
 // host, who resets that bullet for everyone. Each player also broadcasts its block and its
 // own shots, drawn translucent on everyone else's screen. Lives and score are per player.
-// When any player dies, the game ends for everyone in it.
+// Power-up icons are shared: any multiple of 50 points (from any player) drops one on the
+// map, and whoever touches it first gets the boost. When any player dies, the game ends for
+// everyone in it.
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -18,6 +20,8 @@ const POS_MS = 100; // player position + shots: 10 per second
 const WORLD_MS = 66; // host's bullets + clock: ~15 per second
 const STALE_MS = 3000; // drop a ghost that has gone quiet
 const HIT_HOLD_MS = 350; // a guest keeps its own copy of a bullet it just hit, until the host's reset arrives
+const PICKUP_HOLD_MS = 3000; // a guest ignores a power-up it just took while the host removes it
+const POWERUP_EVERY = 50;
 const SMOOTH = 0.25; // per-frame approach to a ghost's latest position (hides the 10 Hz steps)
 const SHOT_SPEED = 13; // matches the game: shots move 13 px per frame
 const MAX_SHOTS = 24;
@@ -57,6 +61,8 @@ export function connect(name, onCount) {
   let pendingWorld = null;
   let worldFrom = null; // host id of pendingWorld
   const events = [];
+  const pickups = []; // host: power-up ids other players took since last frame
+  const taken = new Map(); // guest: power-up id -> hold-until time
   let gameOver = false; // another player died
   const holds = new Map(); // bullet -> hold-until time
 
@@ -84,7 +90,7 @@ export function connect(name, onCount) {
       const g = ghosts.get(p.id);
       const shots = (p.shots || []).map(([x, y]) => ({ x, y }));
       if (g) Object.assign(g, { name: p.name, tx: p.x, ty: p.y, score: p.score, alive: p.alive, shots, seen: now });
-      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, alive: p.alive, shots, seen: now });
+      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, alive: p.alive, level: Math.floor((p.score || 0) / POWERUP_EVERY), shots, seen: now });
     })
     .on('broadcast', { event: 'world' }, ({ payload: p }) => {
       if (!p || p.from === id || p.from !== hostId()) return; // only the current host's world counts
@@ -96,6 +102,9 @@ export function connect(name, onCount) {
     })
     .on('broadcast', { event: 'hit' }, ({ payload: p }) => {
       if (p && isHost() && BULLET_KEYS[p.bullet]) events.push(p.bullet);
+    })
+    .on('broadcast', { event: 'pickup' }, ({ payload: p }) => {
+      if (p?.powerupId && isHost()) pickups.push(p.powerupId);
     })
     .on('presence', { event: 'sync' }, () => {
       const online = channel.presenceState();
@@ -114,6 +123,19 @@ export function connect(name, onCount) {
         alive = s.cont;
         channel.track({ name: nameOf(), joinedAt, alive });
         if (!alive) channel.send({ type: 'broadcast', event: 'gameover', payload: { from: id } });
+      }
+      // The host owns the shared power-up map: drop the ones other players took, and spawn
+      // an icon whenever any player's score crosses a multiple of 50.
+      if (pickups.length && isHost()) {
+        const gone = new Set(pickups.splice(0));
+        s.powerups = (s.powerups || []).filter((p) => !gone.has(p.id));
+      }
+      for (const g of ghosts.values()) {
+        const level = Math.floor((g.score || 0) / POWERUP_EVERY);
+        if (level > g.level) {
+          if (isHost()) for (let i = g.level; i < level; i += 1) spawnPowerup(s);
+          g.level = level;
+        }
       }
       if (now - lastPos >= POS_MS) {
         lastPos = now;
@@ -146,6 +168,8 @@ export function connect(name, onCount) {
         if (now > until) holds.delete(bullet);
         else for (const k of BULLET_KEYS[bullet]) delete w[k];
       }
+      for (const [pid, until] of taken) if (now > until) taken.delete(pid);
+      if (w.powerups && taken.size) w.powerups = w.powerups.filter((p) => !taken.has(p.id));
       return w;
     },
 
@@ -163,6 +187,12 @@ export function connect(name, onCount) {
       if (isHost() || !synced) return;
       holds.set(bullet, performance.now() + HIT_HOLD_MS);
       channel.send({ type: 'broadcast', event: 'hit', payload: { bullet } });
+    },
+
+    reportPickup(powerupId) {
+      if (isHost() || !synced) return;
+      taken.set(powerupId, performance.now() + PICKUP_HOLD_MS);
+      channel.send({ type: 'broadcast', event: 'pickup', payload: { powerupId } });
     },
 
     targetY(s) {
