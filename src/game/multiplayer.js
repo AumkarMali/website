@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -145,8 +145,11 @@ export function connect(name, onCount) {
       }
       if (ultRequests.length && isHost()) {
         for (const req of ultRequests.splice(0)) {
-          if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
-          if (req.type === 'king') {
+          if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.timer < ULT_MIN_TIMER) break;
+          if (req.type === 'killer') {
+            s.killer = KILLER_FRAMES;
+            s.killerBy = req.id;
+          } else if (req.type === 'king') {
             saveKingSnapshot(s);
             s.kingWindup = KING_WINDUP_FRAMES;
             s.slowBy = req.id;
@@ -228,8 +231,11 @@ export function connect(name, onCount) {
 
     startUlt(s, type) {
       if (isHost()) {
-        if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
-        if (type === 'king') {
+        if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.timer < ULT_MIN_TIMER) return true;
+        if (type === 'killer') {
+          s.killer = KILLER_FRAMES;
+          s.killerBy = id;
+        } else if (type === 'king') {
           saveKingSnapshot(s);
           s.kingWindup = KING_WINDUP_FRAMES;
           s.slowBy = id;
@@ -250,6 +256,10 @@ export function connect(name, onCount) {
 
     isSlowUlter(s) {
       return s.slowBy === id;
+    },
+
+    isKillerUlter(s) {
+      return s.killerBy === id;
     },
 
     cancelUlt(s) {

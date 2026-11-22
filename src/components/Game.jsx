@@ -37,6 +37,12 @@ function createAudio() {
   kingGain.connect(ac.destination);
   let kingBuffer = null;
   let kingSource = null;
+  // Killer Queen's line plays when its buff starts
+  const killerGain = ac.createGain();
+  killerGain.gain.value = 1;
+  killerGain.connect(ac.destination);
+  let killerBuffer = null;
+  let killerSource = null;
   let musicSource = null;
   // the shot-hit explosion is 3x, while the shoot sound is halved (it was too loud)
   const hitGain = ac.createGain();
@@ -77,6 +83,11 @@ function createAudio() {
     .then((b) => ac.decodeAudioData(b))
     .then((buf) => { kingBuffer = buf; })
     .catch(() => {});
+  fetch('/game/killerqueen.mp3')
+    .then((r) => r.arrayBuffer())
+    .then((b) => ac.decodeAudioData(b))
+    .then((buf) => { killerBuffer = buf; })
+    .catch(() => {});
   // The music file is large; if it decodes late, join at the right position.
   load('music').then(() => {
     if (musicStartedAt !== null && buffers.music) startMusic(Math.max(0, ac.currentTime - musicStartedAt));
@@ -88,10 +99,22 @@ function createAudio() {
     stopUlt: () => {
       try { ultSource?.stop(); } catch { /* ended */ }
       try { kingSource?.stop(); } catch { /* ended */ }
+      try { killerSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
+      killerSource = null;
     },
     sfx(name) {
+      if (name === 'killer') {
+        if (!killerBuffer) return;
+        const src = ac.createBufferSource();
+        src.buffer = killerBuffer;
+        src.connect(killerGain);
+        src.onended = () => { if (killerSource === src) killerSource = null; };
+        killerSource = src;
+        src.start();
+        return;
+      }
       if (name === 'king') {
         if (!kingBuffer) return;
         const src = ac.createBufferSource();
@@ -169,8 +192,10 @@ function createAudio() {
       stopMusic();
       try { ultSource?.stop(); } catch { /* ended */ }
       try { kingSource?.stop(); } catch { /* ended */ }
+      try { killerSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
+      killerSource = null;
       active.forEach((s) => { try { s.stop(); } catch { /* ended */ } });
       ac.close().catch(() => {});
     },
@@ -311,6 +336,7 @@ const Game = ({ onClose }) => {
         stopUlt: () => audio.stopUlt(),
         isUlter: (st) => st.timeStopBy == null || (mp ? mp.isUlter(st) : true),
         isSlowUlter: (st) => (mp ? mp.isSlowUlter(st) : true),
+        isKillerUlter: (st) => (mp ? mp.isKillerUlter(st) : true),
         selfId: () => mp?.playerId() ?? null,
         ownsWorld: () => !mp || mp.isHost() || !mp.isSynced(),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
@@ -409,23 +435,32 @@ const Game = ({ onClose }) => {
         ) : (
           <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-5 overflow-y-auto bg-[#141019] p-5">
             <h2 className="text-center text-xl font-semibold text-white">Choose your ultimate</h2>
-            <div className="grid w-full max-w-2xl gap-4 sm:grid-cols-2">
+            <div className="grid w-full max-w-2xl gap-3 sm:grid-cols-3">
               <button
                 onClick={() => setCharacter('world')}
-                className="rounded-xl border border-violet-400/40 bg-violet-500/10 p-5 text-left transition hover:border-violet-300 hover:bg-violet-500/20"
+                className="rounded-xl border border-violet-400/40 bg-violet-500/10 p-4 text-left transition hover:border-violet-300 hover:bg-violet-500/20"
               >
-                <span className="block text-lg font-bold text-violet-200">The World</span>
+                <span className="block text-base font-bold text-violet-200">The World</span>
                 <span className="mt-2 block text-sm text-white/60">
                   Stop time for 10 seconds. Only you can move, shoot and collect power-ups.
                 </span>
               </button>
               <button
                 onClick={() => setCharacter('king')}
-                className="rounded-xl border border-red-400/40 bg-red-500/10 p-5 text-left transition hover:border-red-300 hover:bg-red-500/20"
+                className="rounded-xl border border-red-400/40 bg-red-500/10 p-4 text-left transition hover:border-red-300 hover:bg-red-500/20"
               >
-                <span className="block text-lg font-bold text-red-200">King Crimson</span>
+                <span className="block text-base font-bold text-red-200">King Crimson</span>
                 <span className="mt-2 block text-sm text-white/60">
-                  Slow the world to 25% for 10 seconds and rewrite its future. You keep full speed — press T again to erase it and roll everything back.
+                  See 10 seconds ahead and move freely — or press T again to erase that future.
+                </span>
+              </button>
+              <button
+                onClick={() => setCharacter('killer')}
+                className="rounded-xl border border-fuchsia-400/40 bg-fuchsia-500/10 p-4 text-left transition hover:border-fuchsia-300 hover:bg-fuchsia-500/20"
+              >
+                <span className="block text-base font-bold text-fuchsia-200">Killer Queen</span>
+                <span className="mt-2 block text-sm text-white/60">
+                  For 30 seconds your shots blast a wide radius that destroys every enemy bullet it touches.
                 </span>
               </button>
             </div>

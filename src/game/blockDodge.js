@@ -43,6 +43,8 @@ export const ULT_WINDUP_FRAMES = 2 * 60;
 export const KING_FRAMES = 10 * 60; // King Crimson: 10 s of 25% world speed
 export const KING_WINDUP_FRAMES = 110; // ~1.83 s: the effect starts 1.3 s into the scream
 const KING_FX_FRAMES = 60; // ripple runs for 1 s, then the red shade takes over
+export const KILLER_FRAMES = 30 * 60; // Killer Queen: 30 s of blast-radius shots
+const KILLER_RADIUS = 140; // px destroyed around each shot hit
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
@@ -159,6 +161,9 @@ export function createState(ultType = 'world') {
     slowBy: null, // id of the player who used King Crimson
     kingWindup: 0, // frames of the King Crimson scream before the slow starts
     slowAnim: 0, // frames since King Crimson's slow started, for its ripple
+    killer: 0, // frames of Killer Queen's blast-radius shots left
+    killerBy: null, // id of the player who used Killer Queen
+    killerPrev: false, // last frame's killer state, so its clip plays once
     eraseSeq: 0, // bumps when King Crimson erases time, so guests roll back too
     seenEraseSeq: 0, // last eraseSeq this client restored from
     slowPrev: 0, // last frame's slow, so the snapshot is dropped when the slow ends
@@ -196,6 +201,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
+  'killer', 'killerBy',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -357,12 +363,15 @@ export function spawnPowerup(s, rng = Math.random) {
 // Ultimate: freeze time (The World) or slow the world and rewrite its future (King Crimson).
 function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
-  if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
+  if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
   if (s.ultType === 'king') saveKingSnapshot(s); // rollback point for the erase
   s.ultCooldown = ULT_COOLDOWN;
   if (io.startUlt?.(s, s.ultType)) return; // host took over, or a guest asked the host
-  if (s.ultType === 'king') {
+  if (s.ultType === 'killer') {
+    s.killer = KILLER_FRAMES;
+    s.killerBy = io.selfId?.() ?? null;
+  } else if (s.ultType === 'king') {
     s.kingWindup = KING_WINDUP_FRAMES;
     s.slowBy = io.selfId?.() ?? null;
   } else {
@@ -402,11 +411,19 @@ function wander(s, rng) {
   s.accel_y = s.aiDY * 0.2;
 }
 
-// Small yellow burst where a shot destroys an enemy bullet.
+// Small yellow burst where a shot destroys an enemy bullet; Killer Queen makes it a big blast.
 const EXPLOSION_FRAMES = 18;
-function spawnExplosion(s, rect) {
+const BIG_EXPLOSION_FRAMES = 26;
+function spawnExplosion(s, rect, big = false) {
   if (!rect || rect.w <= 0 || rect.h <= 0) return;
-  s.explosions.push({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2, ttl: EXPLOSION_FRAMES });
+  const frames = big ? BIG_EXPLOSION_FRAMES : EXPLOSION_FRAMES;
+  s.explosions.push({
+    x: rect.x + rect.w / 2,
+    y: rect.y + rect.h / 2,
+    ttl: frames,
+    max: frames,
+    size: big ? KILLER_RADIUS : 25,
+  });
 }
 
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
@@ -552,6 +569,7 @@ export function step(s, events, io) {
   const music = io.music || { play() {}, stop() {}, volume() {} };
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
+  const isKillerUlter = (st) => (io.isKillerUlter ? io.isKillerUlter(st) : st.killerBy == null);
   const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
@@ -609,6 +627,9 @@ export function step(s, events, io) {
     } else if (s.slow > 0) {
       s.slow -= 1;
       if (s.slow === 0) s.slowBy = null;
+    } else if (s.killer > 0) {
+      s.killer -= 1;
+      if (s.killer === 0) s.killerBy = null;
     }
   }
 
@@ -636,6 +657,9 @@ export function step(s, events, io) {
   else s.ultAnim = 0;
   if (slowActive) s.slowAnim += 1;
   else s.slowAnim = 0;
+  // Killer Queen just plays its clip once; the BGM and the world keep running
+  if (s.killer > 0 && !s.killerPrev) sfx('killer');
+  s.killerPrev = s.killer > 0;
 
   // King Crimson's random future: everyone but the ult user wanders on autopilot.
   const aiControlled = slowActive && !isSlowUlter(s);
@@ -778,6 +802,40 @@ export function step(s, events, io) {
   const bullet3 = drawRect(ctx, s.color3, s.x_enemy3, s.rand3, 20, 7);
   drawRect(ctx, s.color4, s.Warn_goto, s.x_warn, 30, 30); // warning
 
+  // Killer Queen: each shot hit blasts a wide radius and wipes nearby enemy bullets too.
+  const shotExplosion = (rect, type) => {
+    if (!(s.killer > 0 && isKillerUlter(s))) {
+      spawnExplosion(s, rect);
+      return;
+    }
+    spawnExplosion(s, rect, true);
+    const cx = rect.x + rect.w / 2;
+    const cy = rect.y + rect.h / 2;
+    const targets = [['b1', bullet]];
+    if (levels >= 30) targets.push(['b2', bullet2], ['b21', bullet21]);
+    if (levels >= 59) targets.push(['b3', bullet3]);
+    for (const [t, r] of targets) {
+      if (t === type || !r || r.w <= 0 || r.h <= 0) continue;
+      const bx = r.x + r.w / 2;
+      const by = r.y + r.h / 2;
+      if (Math.hypot(bx - cx, by - cy) > KILLER_RADIUS + Math.max(r.w, r.h) / 2) continue;
+      io.report?.(t);
+      if (t === 'b1') {
+        s.x_enemy = 0;
+        respawnBullet1(s, io, rng);
+      } else if (t === 'b2') {
+        s.x_enemy2 = 0;
+        s.rand2 = rng.randint(30, 540);
+      } else if (t === 'b21') {
+        s.x_enemy21 = 780;
+        s.rand21 = rng.randint(30, 540);
+      } else {
+        s.rand3 = s.x_warn + 11;
+        s.x_enemy3 = 0;
+      }
+    }
+  };
+
   if (!frozen) {
     // A bounce is always the normal max speed, even during a 2x speed boost: the 400 impulse
     // used to be clamped by the boosted cap, which made boosted wall bounces twice as fast.
@@ -836,7 +894,7 @@ export function step(s, events, io) {
       io.report?.('b1');
       respawnBullet1(s, io, rng);
       sfx('hit');
-      spawnExplosion(s, bullet);
+      shotExplosion(bullet, 'b1');
       s.x_enemy = 0;
       s.score += 2;
     }
@@ -870,7 +928,7 @@ export function step(s, events, io) {
         knock(s, RECOIL_CAP);
         s.rand2 = rng.randint(30, 540);
         sfx('hit');
-        spawnExplosion(s, bullet2);
+        shotExplosion(bullet2, 'b2');
       }
 
       if (collide(bullet21, wall1)) {
@@ -894,7 +952,7 @@ export function step(s, events, io) {
         s.x_enemy21 = 780;
         s.rand21 = rng.randint(30, 540);
         sfx('hit');
-        spawnExplosion(s, bullet21);
+        shotExplosion(bullet21, 'b21');
       }
     }
 
@@ -928,7 +986,7 @@ export function step(s, events, io) {
         s.rand3 = s.x_warn + 11;
         s.x_enemy3 = 0;
         sfx('hit');
-        spawnExplosion(s, bullet3);
+        shotExplosion(bullet3, 'b3');
       }
     }
   }
@@ -985,7 +1043,7 @@ export function step(s, events, io) {
       if (!stopHit.b1 && shotHits(bullet)) {
         io.report?.('b1');
         sfx('hit');
-        spawnExplosion(s, bullet);
+        shotExplosion(bullet, 'b1');
         s.x_enemy = -60;
         s.score += 2;
       }
@@ -996,20 +1054,20 @@ export function step(s, events, io) {
           s.x_change += 20;
           knock(s, RECOIL_CAP);
           sfx('hit');
-          spawnExplosion(s, bullet2);
+          shotExplosion(bullet2, 'b2');
         }
         if (!stopHit.b21 && shotHits(bullet21)) {
           io.report?.('b21');
           s.x_enemy21 = 860;
           sfx('hit');
-          spawnExplosion(s, bullet21);
+          shotExplosion(bullet21, 'b21');
         }
       }
       if (levels >= 59 && !stopHit.b3 && shotHits(bullet3)) {
         io.report?.('b3');
         s.x_enemy3 = -60;
         sfx('hit');
-        spawnExplosion(s, bullet3);
+        shotExplosion(bullet3, 'b3');
       }
     }
   }
@@ -1017,10 +1075,16 @@ export function step(s, events, io) {
   // small yellow bursts where shots destroyed enemy bullets
   if (ctx) {
     for (const e of s.explosions) {
-      const p = 1 - e.ttl / EXPLOSION_FRAMES;
-      const r = 5 + 20 * p;
+      const p = 1 - e.ttl / e.max;
+      const r = 5 + (e.size - 5) * p;
       ctx.save();
       ctx.globalAlpha = 1 - p;
+      if (e.size > 60) { // Killer Queen blast halo
+        ctx.fillStyle = 'rgba(255, 170, 30, 0.16)';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.fillStyle = 'rgba(255, 226, 65, 0.95)';
       ctx.beginPath();
       ctx.arc(e.x, e.y, r * 0.55, 0, Math.PI * 2);
@@ -1066,9 +1130,11 @@ export function step(s, events, io) {
       text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
     }
     const ultLocked = s.timer < ULT_MIN_TIMER;
-    const ultColor = s.slow > 0 || s.kingWindup > 0
-      ? [248, 113, 113]
-      : s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
+    const ultColor = s.killer > 0
+      ? [244, 114, 182]
+      : s.slow > 0 || s.kingWindup > 0
+        ? [248, 113, 113]
+        : s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
     const ultLabel = s.timeStop > 0
       ? `TIME STOP  ${(s.timeStop / 60).toFixed(1)}s`
       : s.ultWindup > 0
@@ -1077,10 +1143,13 @@ export function step(s, events, io) {
           ? `KING CRIMSON  ${(s.slow / 60).toFixed(1)}s`
           : s.kingWindup > 0
             ? `KING CRIMSON IN  ${(s.kingWindup / 60).toFixed(1)}s`
-            : ultLocked
-              ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
-              : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
-                : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
+            : s.killer > 0
+              ? `KILLER QUEEN  ${(s.killer / 60).toFixed(1)}s`
+              : ultLocked
+                ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
+                : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
+                  : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
+                    : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
     text(ctx, 'bold 18px Arial, sans-serif', ultLabel, ultColor, 680, 580);
   }
 
