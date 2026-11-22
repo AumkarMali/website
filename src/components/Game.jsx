@@ -24,9 +24,9 @@ function createAudio() {
   const musicGain = ac.createGain();
   musicGain.gain.value = 0;
   musicGain.connect(ac.destination);
-  // the ultimate clip runs through its own gain: 10x the original volume
+  // the ultimate clip runs through its own gain: 20x the original volume
   const ultGain = ac.createGain();
-  ultGain.gain.value = 10;
+  ultGain.gain.value = 20;
   ultGain.connect(ac.destination);
   let ultBuffer = null;
   let ultSource = null;
