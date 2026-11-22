@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SILVER_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -95,14 +95,28 @@ export function connect(name, onCount) {
   };
   const isHost = () => synced && alive && hostId() === id;
 
+  // Silver Chariot: give every player a random combat ult different from their pick.
+  const COMBAT_ULTS = ['world', 'king', 'killer', 'd4c', 'cmoon'];
+  const beginSilver = (s) => {
+    const pick = (base) => {
+      const pool = COMBAT_ULTS.filter((t) => t !== base);
+      return pool[Math.floor(Math.random() * pool.length)];
+    };
+    const types = {};
+    types[id] = pick(s.baseUltType);
+    for (const [gid, g] of ghosts) types[gid] = pick(g.baseUlt || 'world');
+    s.silver = SILVER_FRAMES;
+    s.silverTypes = types;
+  };
+
   channel
     .on('broadcast', { event: 'pos' }, ({ payload: p }) => {
       if (!p || p.id === id) return;
       const now = performance.now();
       const g = ghosts.get(p.id);
       const shots = (p.shots || []).map(([x, y]) => ({ x, y }));
-      if (g) Object.assign(g, { name: p.name, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, alive: p.alive, shots, seen: now });
-      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, alive: p.alive, level: Math.floor((p.score || 0) / POWERUP_EVERY), shots, seen: now });
+      if (g) Object.assign(g, { name: p.name, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, baseUlt: p.baseUlt || 'world', alive: p.alive, shots, seen: now });
+      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, baseUlt: p.baseUlt || 'world', alive: p.alive, level: Math.floor((p.score || 0) / POWERUP_EVERY), shots, seen: now });
     })
     .on('broadcast', { event: 'world' }, ({ payload: p }) => {
       if (!p || p.from === id || p.from !== hostId()) return; // only the current host's world counts
@@ -122,7 +136,7 @@ export function connect(name, onCount) {
       if (typeof p?.x === 'number' && typeof p?.y === 'number') booms.push({ x: p.x, y: p.y, big: !!p.big });
     })
     .on('broadcast', { event: 'ultsound' }, ({ payload: p }) => {
-      if (p?.type === 'killer' || p?.type === 'd4c' || p?.type === 'cmoon') ultSounds.push(p.type);
+      if (p?.type === 'killer' || p?.type === 'd4c' || p?.type === 'cmoon' || p?.type === 'silver') ultSounds.push(p.type);
     })
     .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
       if (p?.from && isHost()) ultRequests.push({ id: p.from, type: p.type });
@@ -160,7 +174,9 @@ export function connect(name, onCount) {
       if (ultRequests.length && isHost()) {
         for (const req of ultRequests.splice(0)) {
           if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
-          if (req.type === 'cmoon') {
+          if (req.type === 'silver') {
+            if (s.silver === 0) beginSilver(s);
+          } else if (req.type === 'cmoon') {
             addBuff(s.cMoonBuffs, req.id, CMOON_FRAMES);
           } else if (req.type === 'd4c') {
             addBuff(s.d4cBuffs, req.id, D4C_FRAMES);
@@ -200,6 +216,7 @@ export function connect(name, onCount) {
             y: Math.round(s.y),
             score: Math.trunc(s.score),
             hearts: Math.max(0, s.death),
+            baseUlt: s.baseUltType,
             alive,
             shots: s.shots.slice(-MAX_SHOTS).map((b) => [Math.round(b.x), Math.round(b.y)]),
           },
@@ -268,7 +285,10 @@ export function connect(name, onCount) {
     startUlt(s, type) {
       if (isHost()) {
         if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
-        if (type === 'cmoon') {
+        if (type === 'silver') {
+          if (s.silver > 0) return true;
+          beginSilver(s);
+        } else if (type === 'cmoon') {
           addBuff(s.cMoonBuffs, id, CMOON_FRAMES);
         } else if (type === 'd4c') {
           addBuff(s.d4cBuffs, id, D4C_FRAMES);

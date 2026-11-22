@@ -54,6 +54,7 @@ const D4C_COOLDOWN = 20 * 60; // D4C's reuse gap is 20 s instead of the usual 30
 export const CMOON_FRAMES = 10 * 60; // C-Moon: 10 s of bullet gravity + absorption
 const CMOON_ACCEL = 0.16; // px/frame^2 enemy bullets accelerate toward a C-Moon user
 const CMOON_MAX_SPEED = 6; // cap on the gravity velocity so they don't orbit wildly
+export const SILVER_FRAMES = 100 * 60; // Silver Chariot: 100 s of swapped ults
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
@@ -112,6 +113,7 @@ export function createState(ultType = 'world') {
   return {
     player_color: [0, 120, 250],
     ultType, // 'world' (time stop) or 'king' (slowed random future)
+    baseUltType: ultType, // the picked ult, restored after a Silver Chariot swap
     score: 0,
     lives: 3,
     x: 400,
@@ -175,6 +177,8 @@ export function createState(ultType = 'world') {
     killerBuffs: [], // [{ id, frames }] players with Killer Queen's blast shots active
     d4cBuffs: [], // [{ id, frames }] players protected by D4C
     cMoonBuffs: [], // [{ id, frames }] players pulling and absorbing bullets with C-Moon
+    silver: 0, // frames left of the Silver Chariot ult swap
+    silverTypes: {}, // { playerId: ultType } temporary assignments
     gv1x: 0, gv1y: 0, // C-Moon gravity velocity added to each enemy bullet
     gv2x: 0, gv2y: 0,
     gv21x: 0, gv21y: 0,
@@ -218,7 +222,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
-  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow',
+  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow', 'silver', 'silverTypes',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -413,6 +417,15 @@ function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
   if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
+  // Silver Chariot only works in a shared game, and only when no swap is already running.
+  if (s.ultType === 'silver') {
+    if (!io.online?.() || s.silver > 0) return;
+    s.ultCooldown = ULT_COOLDOWN;
+    io.sfx?.('silver');
+    io.sendUltSound?.('silver');
+    io.startUlt?.(s, 'silver');
+    return;
+  }
   const selfId = io.selfId?.() ?? null;
   if (s.ultType === 'killer' && hasBuff(s.killerBuffs, selfId)) return;
   if (s.ultType === 'd4c' && hasBuff(s.d4cBuffs, selfId)) return;
@@ -661,6 +674,15 @@ export function step(s, events, io) {
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
   const selfId = io.selfId?.() ?? null;
+  // Silver Chariot: adopt the shared temporary ult while the swap is active.
+  if (s.silver > 0) {
+    const next = s.silverTypes?.[selfId] || s.baseUltType;
+    if (next !== s.ultType) s.ultCooldown = 0;
+    s.ultType = next;
+  } else if (s.ultType !== s.baseUltType) {
+    s.ultCooldown = 0;
+    s.ultType = s.baseUltType;
+  }
   const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
@@ -728,6 +750,10 @@ export function step(s, events, io) {
       s.d4cBuffs = s.d4cBuffs.filter((b) => b.frames > 0);
       s.cMoonBuffs = s.cMoonBuffs.filter((b) => b.frames > 0);
       if (s.bulletSlow > 0) s.bulletSlow -= 1;
+    }
+    if (s.silver > 0) {
+      s.silver -= 1;
+      if (s.silver === 0) s.silverTypes = {};
     }
   }
 
@@ -1388,10 +1414,12 @@ export function step(s, events, io) {
                   : ultLocked
                     ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
                     : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
-                      : s.ultType === 'cmoon' ? 'C-MOON READY [T]'
-                        : s.ultType === 'd4c' ? 'D4C READY [T]'
-                          : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
-                            : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
+                      : s.ultType === 'silver'
+                        ? (io.online?.() ? 'SILVER CHARIOT READY [T]' : 'SILVER CHARIOT (MULTIPLAYER ONLY)')
+                        : s.ultType === 'cmoon' ? 'C-MOON READY [T]'
+                          : s.ultType === 'd4c' ? 'D4C READY [T]'
+                            : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
+                              : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
     text(ctx, 'bold 18px Arial, sans-serif', ultLabel, ultColor, 680, 580);
   }
 

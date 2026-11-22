@@ -55,6 +55,12 @@ function createAudio() {
   cmoonGain.connect(ac.destination);
   let cmoonBuffer = null;
   let cmoonSource = null;
+  // Silver Chariot's summon
+  const silverGain = ac.createGain();
+  silverGain.gain.value = 1;
+  silverGain.connect(ac.destination);
+  let silverBuffer = null;
+  let silverSource = null;
   let musicSource = null;
   // the shot-hit explosion is 3x, while the shoot sound is halved (it was too loud)
   const hitGain = ac.createGain();
@@ -110,6 +116,11 @@ function createAudio() {
     .then((b) => ac.decodeAudioData(b))
     .then((buf) => { cmoonBuffer = buf; })
     .catch(() => {});
+  fetch('/game/silver.mp3')
+    .then((r) => r.arrayBuffer())
+    .then((b) => ac.decodeAudioData(b))
+    .then((buf) => { silverBuffer = buf; })
+    .catch(() => {});
   // The music file is large; if it decodes late, join at the right position.
   load('music').then(() => {
     if (musicStartedAt !== null && buffers.music) startMusic(Math.max(0, ac.currentTime - musicStartedAt));
@@ -124,13 +135,25 @@ function createAudio() {
       try { killerSource?.stop(); } catch { /* ended */ }
       try { d4cSource?.stop(); } catch { /* ended */ }
       try { cmoonSource?.stop(); } catch { /* ended */ }
+      try { silverSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
       killerSource = null;
       d4cSource = null;
       cmoonSource = null;
+      silverSource = null;
     },
     sfx(name) {
+      if (name === 'silver') {
+        if (!silverBuffer) return;
+        const src = ac.createBufferSource();
+        src.buffer = silverBuffer;
+        src.connect(silverGain);
+        src.onended = () => { if (silverSource === src) silverSource = null; };
+        silverSource = src;
+        src.start();
+        return;
+      }
       if (name === 'cmoon') {
         if (!cmoonBuffer) return;
         const src = ac.createBufferSource();
@@ -241,11 +264,13 @@ function createAudio() {
       try { killerSource?.stop(); } catch { /* ended */ }
       try { d4cSource?.stop(); } catch { /* ended */ }
       try { cmoonSource?.stop(); } catch { /* ended */ }
+      try { silverSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
       killerSource = null;
       d4cSource = null;
       cmoonSource = null;
+      silverSource = null;
       active.forEach((s) => { try { s.stop(); } catch { /* ended */ } });
       ac.close().catch(() => {});
     },
@@ -534,6 +559,15 @@ const Game = ({ onClose }) => {
                 <span className="block text-base font-bold text-emerald-200">C-Moon</span>
                 <span className="mt-2 block text-sm text-white/60">
                   For 10 seconds enemy bullets accelerate toward you, and you absorb any that touch you.
+                </span>
+              </button>
+              <button
+                onClick={() => setCharacter('silver')}
+                className="rounded-xl border border-slate-300/40 bg-slate-400/10 p-4 text-left transition hover:border-slate-200 hover:bg-slate-400/20"
+              >
+                <span className="block text-base font-bold text-slate-100">Silver Chariot</span>
+                <span className="mt-2 block text-sm text-white/60">
+                  Multiplayer only: for 100 seconds every player's ultimate is randomly swapped to a different one.
                 </span>
               </button>
             </div>
