@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { TypeAnimation } from 'react-type-animation';  // Importing the TypeAnimation component
+import { isGameActive } from '../game/activity';
 
 const IntroductionPage = () => {
   const [isVisible, setIsVisible] = useState(false);
@@ -36,6 +37,7 @@ const IntroductionPage = () => {
     if (!isVisible || reduceMotion) return;
     let clear;
     const swap = () => {
+      if (isGameActive()) return; // don't shuffle the tiles behind Block Dodge
       const a = Math.floor(Math.random() * 12);
       let b = Math.floor(Math.random() * 11);
       if (b >= a) b += 1;

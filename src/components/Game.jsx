@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, RotateCcw, Users, X } from 'lucide-react';
 import { createState, step, FPS, WIDTH, HEIGHT, drawUltOverlay } from '../game/blockDodge';
+import { setGameActive } from '../game/activity';
 // Supabase is only downloaded when the game opens, and only if it's configured.
 const MULTIPLAYER = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
 
@@ -30,13 +31,17 @@ function createAudio() {
   ultGain.connect(ac.destination);
   let ultBuffer = null;
   let ultSource = null;
-  // King Crimson's scream plays at its own level before the slow starts
+  // King Crimson's scream plays before the slow starts, 10x the source volume
   const kingGain = ac.createGain();
-  kingGain.gain.value = 1;
+  kingGain.gain.value = 10;
   kingGain.connect(ac.destination);
   let kingBuffer = null;
   let kingSource = null;
   let musicSource = null;
+  // the shot-hit explosion is 3x, while the shoot sound is halved (it was too loud)
+  const hitGain = ac.createGain();
+  hitGain.gain.value = 3;
+  hitGain.connect(ac.destination);
   let musicStartedAt = null; // ac time of the last mixer.music.play()
   let musicPausedAt = null; // seconds into the track when paused (time stop)
 
@@ -114,8 +119,8 @@ function createAudio() {
         const gain = ac.createGain();
         const t = ac.currentTime;
         const { offset, length, fade } = FIRE_CLIP;
-        gain.gain.setValueAtTime(1, t);
-        gain.gain.setValueAtTime(1, t + length - fade);
+        gain.gain.setValueAtTime(0.5, t);
+        gain.gain.setValueAtTime(0.5, t + length - fade);
         gain.gain.linearRampToValueAtTime(0, t + length);
         src.buffer = buf;
         src.connect(gain).connect(ac.destination);
@@ -125,7 +130,8 @@ function createAudio() {
       if (!buf || active.size >= MAX_CHANNELS) return;
       const src = ac.createBufferSource();
       src.buffer = buf;
-      src.connect(ac.destination);
+      if (name === 'hit') src.connect(hitGain);
+      else src.connect(ac.destination);
       active.add(src);
       src.onended = () => active.delete(src);
       src.start();
@@ -226,6 +232,17 @@ const Game = ({ onClose }) => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Freeze the site behind the game so its videos and animations stop using the CPU.
+  useEffect(() => {
+    setGameActive(true);
+    const videos = [...document.querySelectorAll('video')].filter((v) => !v.paused);
+    videos.forEach((v) => v.pause());
+    return () => {
+      setGameActive(false);
+      videos.forEach((v) => v.play().catch(() => {}));
+    };
   }, []);
 
   // Keyboard -> pygame KEYDOWN/KEYUP (no key repeat, like pygame's default).

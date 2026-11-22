@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, useInView, useReducedMotion } from 'framer-motion';
+import { isGameActive } from '../game/activity';
 import { expertise } from '../constants';
 import { SectionTitle } from './fx';
 
@@ -94,6 +95,10 @@ const SkillRadar = () => {
     };
 
     const frame = (now) => {
+      if (isGameActive()) { // paused while Block Dodge is open
+        raf = requestAnimationFrame(frame);
+        return;
+      }
       const grow = reduce ? 1 : easeOut(Math.min(1, (now - t0) / GROW_MS));
       if (!reduce && now - lastSwap > SWAP_EVERY && activeRef.current === null) {
         swap(now);

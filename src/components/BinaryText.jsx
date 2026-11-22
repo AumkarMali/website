@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef } from 'react';
 import { useInView, useReducedMotion } from 'framer-motion';
+import { isGameActive, onGameActive } from '../game/activity';
 
 const TICK_MS = 50;
 const GLITCH = 0.004; // chance per tick that a random character flips
@@ -30,7 +31,8 @@ const BinaryText = ({ text, className = '', delay = 0, as: Tag = 'p', band = 16,
     if (!inView) return;
 
     const start = performance.now() + delay;
-    const id = setInterval(() => {
+    let id = null;
+    const tick = () => {
       const t = performance.now() - start;
       if (t < 0) return;
       const revealed = Math.min(n, Math.floor((t / decodeMs) * n));
@@ -40,8 +42,22 @@ const BinaryText = ({ text, className = '', delay = 0, as: Tag = 'p', band = 16,
         const inBand = i >= head && i < head + band;
         set(chars[i], i >= revealed || inBand || Math.random() < GLITCH);
       }
-    }, TICK_MS);
-    return () => clearInterval(id);
+    };
+    const startTimer = () => {
+      if (id === null) id = setInterval(tick, TICK_MS);
+    };
+    const stopTimer = () => {
+      if (id !== null) {
+        clearInterval(id);
+        id = null;
+      }
+    };
+    const offActive = onGameActive((active) => (active ? stopTimer() : startTimer()));
+    if (!isGameActive()) startTimer();
+    return () => {
+      stopTimer();
+      offActive();
+    };
   }, [inView, reduce, delay, text, band, speed, decodeMs]);
 
   return (

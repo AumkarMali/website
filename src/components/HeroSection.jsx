@@ -3,6 +3,7 @@ import { TypeAnimation } from 'react-type-animation';
 import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Gamepad2, Loader2 } from 'lucide-react';
 import Game from './Game';
+import { useGameActive } from '../game/activity';
 import { LINKEDIN_URL } from '../constants';
 import { Magnetic, TiltCard } from './fx';
 
@@ -74,6 +75,7 @@ const buttons = [
 
 const HeroSection = () => {
   const [showGame, setShowGame] = useState(false);
+  const gameActive = useGameActive(); // stop the floating chevron while playing
 
   return (
     <motion.div
@@ -142,8 +144,8 @@ const HeroSection = () => {
       <motion.button
         onClick={() => document.getElementById('aboutSec')?.scrollIntoView({ behavior: 'smooth' })}
         className="mt-16 mb-8 flex flex-col items-center gap-1 text-orange-700/80 hover:text-orange-800 dark:text-orange-300/70 dark:hover:text-orange-300"
-        animate={{ y: [0, 10, 0] }}
-        transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+        animate={gameActive ? { y: 0 } : { y: [0, 10, 0] }}
+        transition={gameActive ? { duration: 0 } : { duration: 2, repeat: Infinity, ease: 'easeInOut' }}
         aria-label="Scroll to About"
       >
         <span className="text-xs tracking-[0.3em]">SCROLL</span>

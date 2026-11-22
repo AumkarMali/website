@@ -269,6 +269,17 @@ body {
   color: #fed7aa;
 }
 
+/* Block Dodge is open: freeze and hide the site behind it to save CPU.
+   The game is portaled to <body>, outside #root, so it keeps rendering. */
+body.blockdodge-active #root {
+  visibility: hidden;
+}
+body.blockdodge-active #root *,
+body.blockdodge-active #root *::before,
+body.blockdodge-active #root *::after {
+  animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

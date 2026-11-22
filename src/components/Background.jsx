@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { isGameActive, onGameActive } from '../game/activity';
 
 const Background = ({ children }) => {
   const canvasRef = useRef(null);
@@ -53,6 +54,7 @@ const Background = ({ children }) => {
     particlesRef.current = Array.from({ length: particleCount }, () => new Particle(canvas));
 
     const animate = () => {
+      if (paused) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       particlesRef.current.forEach(particle => {
@@ -129,9 +131,24 @@ const Background = ({ children }) => {
       animationFrameRef.current = requestAnimationFrame(animate);
     };
 
-    animate();
+    // Stop the particle loop entirely while Block Dodge is open.
+    let paused = isGameActive();
+    const setPaused = (value) => {
+      if (value === paused) return;
+      paused = value;
+      if (paused) {
+        cancelAnimationFrame(animationFrameRef.current);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      } else {
+        animate();
+      }
+    };
+    const offActive = onGameActive(setPaused);
+    if (!paused) animate();
 
     return () => {
+      offActive();
+      paused = true;
       window.removeEventListener('resize', updateCanvasSize);
       window.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseleave', onMouseOut);

@@ -41,8 +41,8 @@ const MAX_LIVES = 3;
 export const ULT_FRAMES = 10 * 60;
 export const ULT_WINDUP_FRAMES = 2 * 60;
 export const KING_FRAMES = 10 * 60; // King Crimson: 10 s of 25% world speed
-export const KING_WINDUP_FRAMES = 188; // ~3.13 s: let the "King Crimson" scream finish first
-const KING_FX_FRAMES = 5 * 60; // ripple length once the slow starts
+export const KING_WINDUP_FRAMES = 110; // ~1.83 s: the effect starts 1.3 s into the scream
+const KING_FX_FRAMES = 60; // ripple runs for 1 s, then the red shade takes over
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
@@ -147,6 +147,7 @@ export function createState(ultType = 'world') {
     fireTimer: 0, // frames until the next held-F shot
     powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
     powerups: [], // { id, x, y, ttl, type } icons lying on the map
+    explosions: [], // { x, y, ttl } yellow bursts when a shot destroys an enemy bullet
     timeStop: 0, // frames of stopped time left (ultimate)
     timeStopBy: null, // id of the player who stopped time; null = local player
     ultWindup: 0, // frames of windup left before time actually stops
@@ -160,6 +161,11 @@ export function createState(ultType = 'world') {
     eraseSeq: 0, // bumps when King Crimson erases time, so guests roll back too
     seenEraseSeq: 0, // last eraseSeq this client restored from
     slowPrev: 0, // last frame's slow, so the snapshot is dropped when the slow ends
+    aiDX: 0, // King Crimson: random walking direction for non-ult players
+    aiDY: 0,
+    aiTimer: 0,
+    aiPause: 0,
+    aiPrev: false, // were we on autopilot last frame?
     speedBoost: 0, // frames of 2x speed left
     fireBoost: 0, // frames of 2x fire rate left
     knock: 0, // frames of knockback speed limit left
@@ -234,6 +240,12 @@ export function restoreKingSnapshot(s, localOnly = false) {
     if (localOnly && WORLD_KEYS.includes(k)) continue;
     s[k] = copy[k];
   }
+  // give control back immediately, following whatever keys are held now
+  const { left, right, up, down } = s.arrows;
+  s.accel_x = left || right ? (left > right ? -0.2 : 0.2) : 0;
+  s.accel_y = up || down ? (up > down ? -0.2 : 0.2) : 0;
+  s.fHeld = false;
+  s.aiPrev = false;
   s.ultActivePrev = true; // let the BGM/audio transition run
   kingSnapshots.delete(s);
   return true;
@@ -357,6 +369,44 @@ function tryUlt(s, io, frozen) {
   }
 }
 
+// Human-ish wandering for the players caught in King Crimson's random future.
+function wander(s, rng) {
+  if (s.aiTimer <= 0) {
+    if (rng.randint(0, 99) < 15) {
+      s.aiPause = rng.randint(15, 45); // a short human pause
+      s.aiDX = 0;
+      s.aiDY = 0;
+    } else {
+      s.aiPause = 0;
+      const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]];
+      const d = dirs[rng.randint(0, dirs.length - 1)];
+      s.aiDX = d[0];
+      s.aiDY = d[1];
+    }
+    s.aiTimer = rng.randint(25, 90);
+  }
+  if (s.aiTimer > 0) s.aiTimer -= 1;
+  if (s.aiPause > 0) {
+    s.aiPause -= 1;
+    s.aiDX = 0;
+    s.aiDY = 0;
+  }
+  // steer away from the walls so the wander stays inside the arena
+  if (s.x < 60) s.aiDX = 1;
+  else if (s.x > WIDTH - 110) s.aiDX = -1;
+  if (s.y < 80) s.aiDY = 1;
+  else if (s.y > HEIGHT - 110) s.aiDY = -1;
+  s.accel_x = s.aiDX * 0.2;
+  s.accel_y = s.aiDY * 0.2;
+}
+
+// Small yellow burst where a shot destroys an enemy bullet.
+const EXPLOSION_FRAMES = 18;
+function spawnExplosion(s, rect) {
+  if (!rect || rect.w <= 0 || rect.h <= 0) return;
+  s.explosions.push({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2, ttl: EXPLOSION_FRAMES });
+}
+
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
 function knock(s, cap) {
   s.knock = KNOCK_FRAMES;
@@ -418,18 +468,12 @@ export function drawUltOverlay(ctx, s) {
   const king = s.slow > 0;
   const world = s.timeStop > 0 || s.ultWindup > 0;
   if (!ctx || (!king && !world)) return;
-  const t = king ? s.slowAnim : s.ultAnim - ULT_FX_DELAY_FRAMES;
-  if (t <= 0) return;
   const cx = WIDTH / 2;
   const cy = HEIGHT / 2;
-  // time slowly drains the colour while the stop lasts
-  const wash = s.timeStop > 0 ? 0.22 : 0.08 + 0.12 * Math.min(1, t / ULT_WINDUP_FRAMES);
   ctx.save();
-  ctx.fillStyle = king ? `rgba(170, 24, 48, ${wash})` : `rgba(90, 56, 200, ${wash})`;
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
-  const fxFrames = king ? KING_FX_FRAMES : ULT_FX_FRAMES;
-  if (t <= fxFrames) {
-    const LIFE = 96; // frames for one ripple to cross the screen
+
+  const rings = (t, life) => {
+    const LIFE = life; // frames for one ripple to cross the screen
     for (let i = 0; i < 4; i += 1) {
       const phase = ((t + (i * LIFE) / 4) % LIFE) / LIFE;
       const radius = phase * 760;
@@ -445,7 +489,36 @@ export function drawUltOverlay(ctx, s) {
       ctx.fillStyle = `rgba(255, 255, 255, ${0.3 * (1 - t / 12)})`;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
     }
+  };
+
+  if (king) {
+    const t = s.slowAnim;
+    if (t <= 0) {
+      ctx.restore();
+      return;
+    }
+    if (t <= KING_FX_FRAMES) {
+      rings(t, KING_FX_FRAMES); // ripple only for the first second
+    } else {
+      // then the red shade fades in and stays for the rest of the slow
+      const alpha = 0.22 * Math.min(1, (t - KING_FX_FRAMES) / 12);
+      ctx.fillStyle = `rgba(170, 24, 48, ${alpha})`;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    }
+    ctx.restore();
+    return;
   }
+
+  const t = s.ultAnim - ULT_FX_DELAY_FRAMES;
+  if (t <= 0) {
+    ctx.restore();
+    return;
+  }
+  // time slowly drains the colour while the stop lasts
+  const wash = s.timeStop > 0 ? 0.22 : 0.08 + 0.12 * Math.min(1, t / ULT_WINDUP_FRAMES);
+  ctx.fillStyle = `rgba(90, 56, 200, ${wash})`;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  if (t <= ULT_FX_FRAMES) rings(t, 96);
   ctx.restore();
 }
 
@@ -474,15 +547,18 @@ export function step(s, events, io) {
   const music = io.music || { play() {}, stop() {}, volume() {} };
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
+  const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
   for (const event of events) {
     if (event.type === 'keydown') {
       if (event.key in s.arrows) s.arrows[event.key] = ++s.arrowSeq;
-      if (event.key === 'left') s.accel_x = -0.2;
-      if (event.key === 'right') s.accel_x = 0.2;
-      if (event.key === 'up') s.accel_y = -0.2;
-      if (event.key === 'down') s.accel_y = 0.2;
+      if (!aiControlledNow) {
+        if (event.key === 'left') s.accel_x = -0.2;
+        if (event.key === 'right') s.accel_x = 0.2;
+        if (event.key === 'up') s.accel_y = -0.2;
+        if (event.key === 'down') s.accel_y = 0.2;
+      }
 
       if (event.key === 't') {
         if (s.slow > 0 && isSlowUlter(s)) {
@@ -497,14 +573,16 @@ export function step(s, events, io) {
       }
       if (event.key === 'f') {
         s.fHeld = true;
-        if (!frozenNow) fire(s, sfx);
+        if (!frozenNow && !aiControlledNow) fire(s, sfx);
       }
     } else if (event.type === 'keyup') {
       if (event.key in s.arrows) {
         s.arrows[event.key] = 0;
-        const { left, right, up, down } = s.arrows;
-        s.accel_x = left || right ? (left > right ? -0.2 : 0.2) : 0;
-        s.accel_y = up || down ? (up > down ? -0.2 : 0.2) : 0;
+        if (!aiControlledNow) {
+          const { left, right, up, down } = s.arrows;
+          s.accel_x = left || right ? (left > right ? -0.2 : 0.2) : 0;
+          s.accel_y = up || down ? (up > down ? -0.2 : 0.2) : 0;
+        }
       }
       if (event.key === 'f') s.fHeld = false;
     }
@@ -539,15 +617,6 @@ export function step(s, events, io) {
   const selfScale = slowActive && !isSlowUlter(s) ? SLOW : 1; // everyone but the King Crimson user
   const ultActive = stopped || s.ultWindup > 0 || slowActive || s.kingWindup > 0;
 
-  // King Crimson rewrites the future: the host periodically re-rolls the enemy lanes.
-  if (slowActive && (io.ownsWorld ? io.ownsWorld() : true) && s.slow % 40 === 0) {
-    s.rand = rng.randint(30, 540);
-    s.rand2 = rng.randint(30, 540);
-    s.rand21 = rng.randint(30, 540);
-    s.x_warn = rng.randint(30, 540);
-    s.rand3 = s.x_warn + 11;
-  }
-
   // the clip starts with the windup; the BGM stays off through the whole effect
   if (ultActive && !s.ultActivePrev) {
     sfx(s.kingWindup > 0 || slowActive ? 'king' : 'ult');
@@ -562,7 +631,26 @@ export function step(s, events, io) {
   if (slowActive) s.slowAnim += 1;
   else s.slowAnim = 0;
 
-  if (s.fHeld && !s.firedThisFrame && !frozen) {
+  // King Crimson's random future: everyone but the ult user wanders on autopilot.
+  const aiControlled = slowActive && !isSlowUlter(s);
+  if (aiControlled) {
+    if (!s.aiPrev) {
+      s.aiPrev = true;
+      s.aiTimer = 0;
+      s.aiPause = 0;
+      s.fHeld = false;
+    }
+    wander(s, rng);
+  } else if (s.aiPrev) {
+    // hand control back to the real arrow keys
+    const { left, right, up, down } = s.arrows;
+    s.accel_x = left || right ? (left > right ? -0.2 : 0.2) : 0;
+    s.accel_y = up || down ? (up > down ? -0.2 : 0.2) : 0;
+    s.fHeld = false;
+    s.aiPrev = false;
+  }
+
+  if (s.fHeld && !s.firedThisFrame && !frozen && !aiControlled) {
     s.fireTimer -= (s.fireBoost > 0 ? BOOST : 1) * selfScale;
     if (s.fireTimer <= 0) {
       const carry = s.fireTimer; // keep the leftover so boosted gaps average 4.5 frames (exactly 2x)
@@ -742,6 +830,7 @@ export function step(s, events, io) {
       io.report?.('b1');
       respawnBullet1(s, io, rng);
       sfx('hit');
+      spawnExplosion(s, bullet);
       s.x_enemy = 0;
       s.score += 2;
     }
@@ -775,6 +864,7 @@ export function step(s, events, io) {
         knock(s, RECOIL_CAP);
         s.rand2 = rng.randint(30, 540);
         sfx('hit');
+        spawnExplosion(s, bullet2);
       }
 
       if (collide(bullet21, wall1)) {
@@ -798,6 +888,7 @@ export function step(s, events, io) {
         s.x_enemy21 = 780;
         s.rand21 = rng.randint(30, 540);
         sfx('hit');
+        spawnExplosion(s, bullet21);
       }
     }
 
@@ -831,6 +922,7 @@ export function step(s, events, io) {
         s.rand3 = s.x_warn + 11;
         s.x_enemy3 = 0;
         sfx('hit');
+        spawnExplosion(s, bullet3);
       }
     }
   }
@@ -887,6 +979,7 @@ export function step(s, events, io) {
       if (!stopHit.b1 && shotHits(bullet)) {
         io.report?.('b1');
         sfx('hit');
+        spawnExplosion(s, bullet);
         s.x_enemy = -60;
         s.score += 2;
       }
@@ -897,20 +990,54 @@ export function step(s, events, io) {
           s.x_change += 20;
           knock(s, RECOIL_CAP);
           sfx('hit');
+          spawnExplosion(s, bullet2);
         }
         if (!stopHit.b21 && shotHits(bullet21)) {
           io.report?.('b21');
           s.x_enemy21 = 860;
           sfx('hit');
+          spawnExplosion(s, bullet21);
         }
       }
       if (levels >= 59 && !stopHit.b3 && shotHits(bullet3)) {
         io.report?.('b3');
         s.x_enemy3 = -60;
         sfx('hit');
+        spawnExplosion(s, bullet3);
       }
     }
   }
+
+  // small yellow bursts where shots destroyed enemy bullets
+  if (ctx) {
+    for (const e of s.explosions) {
+      const p = 1 - e.ttl / EXPLOSION_FRAMES;
+      const r = 5 + 20 * p;
+      ctx.save();
+      ctx.globalAlpha = 1 - p;
+      ctx.fillStyle = 'rgba(255, 226, 65, 0.95)';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, r * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 170, 0, 0.9)';
+      ctx.lineWidth = 3 * (1 - p) + 1;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255, 215, 90, 0.9)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 8; i += 1) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(e.x + Math.cos(a) * r * 0.75, e.y + Math.sin(a) * r * 0.75);
+        ctx.lineTo(e.x + Math.cos(a) * r * 1.25, e.y + Math.sin(a) * r * 1.25);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+  for (const e of s.explosions) e.ttl -= 1;
+  s.explosions = s.explosions.filter((e) => e.ttl > 0);
 
   // every multiple of 50 points adds an icon to the shared map; only the host (or a single
   // player) creates them, but every player tracks the level so joining the host role later

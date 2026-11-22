@@ -8,10 +8,10 @@
 // Power-up icons are shared: any multiple of 50 points (from any player) drops one on the
 // map, and whoever touches it first gets the boost. The ultimate (T) depends on the pick:
 // The World runs a 2 s windup then freezes everything for 10 s; King Crimson slows the world
-// to 25% for 10 s, re-rolls enemy lanes, and only its user moves at full speed. Its user can
-// press T again to erase the remaining future and roll the world and every player back to the
-// exact state when it was activated. The host owns both clocks. When any player dies, the game
-// ends for everyone in it.
+// to 25% for 10 s, puts the other players on a random walk, and only its user moves at full
+// speed. Its user can press T again to erase the remaining future and roll the world and every
+// player back to the exact state when it was activated. The host owns both clocks. When any
+// player dies, the game ends for everyone in it.
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
