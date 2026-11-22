@@ -5,7 +5,7 @@
 // others adopt them. When a guest is hit by, or shoots down, an enemy bullet it tells the
 // host, who resets that bullet for everyone. Each player also broadcasts its block and its
 // own shots, drawn translucent on everyone else's screen. Lives and score are per player.
-// If the host dies, the next living player takes over from the same bullets.
+// When any player dies, the game ends for everyone in it.
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
@@ -57,6 +57,7 @@ export function connect(name, onCount) {
   let pendingWorld = null;
   let worldFrom = null; // host id of pendingWorld
   const events = [];
+  let gameOver = false; // another player died
   const holds = new Map(); // bullet -> hold-until time
 
   const channel = sb.channel(CHANNEL, {
@@ -90,6 +91,9 @@ export function connect(name, onCount) {
       pendingWorld = p.world;
       worldFrom = p.from;
     })
+    .on('broadcast', { event: 'gameover' }, () => {
+      gameOver = true;
+    })
     .on('broadcast', { event: 'hit' }, ({ payload: p }) => {
       if (p && isHost() && BULLET_KEYS[p.bullet]) events.push(p.bullet);
     })
@@ -109,6 +113,7 @@ export function connect(name, onCount) {
       if (s.cont !== alive) {
         alive = s.cont;
         channel.track({ name: nameOf(), joinedAt, alive });
+        if (!alive) channel.send({ type: 'broadcast', event: 'gameover', payload: { from: id } });
       }
       if (now - lastPos >= POS_MS) {
         lastPos = now;
@@ -142,6 +147,12 @@ export function connect(name, onCount) {
         else for (const k of BULLET_KEYS[bullet]) delete w[k];
       }
       return w;
+    },
+
+    takeGameOver() {
+      const g = gameOver;
+      gameOver = false;
+      return g;
     },
 
     takeEvents() {

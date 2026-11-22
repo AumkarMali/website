@@ -22,6 +22,13 @@ export const HEIGHT = 600;
 export const FPS = 60;
 const FIRE_EVERY = 9; // frames between shots while F is held: 0.15 s at 60 FPS
 const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
+// Power-up: each multiple of 50 points drops a bolt icon at a random spot; touching it
+// gives BOOST_FRAMES of 2x movement speed and 2x fire rate.
+const POWERUP_EVERY = 50;
+const POWERUP_FRAMES = 10 * 60; // icon disappears if not picked up in 10 s
+const POWERUP_SIZE = 30;
+const BOOST_FRAMES = 5 * 60;
+const BOOST = 2;
 
 const NAMED = {
   grey12: 'rgb(31,31,31)',
@@ -112,6 +119,9 @@ export function createState() {
     arrows: { left: 0, right: 0, up: 0, down: 0 }, // press order of held arrows, 0 = up
     arrowSeq: 0,
     fireTimer: 0, // frames until the next held-F shot
+    powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
+    powerup: null, // { x, y, ttl } while an icon is on the map
+    boost: 0, // frames of boost left
     firedThisFrame: false,
     fade_in: 0,
     movement_y: 0,
@@ -178,6 +188,34 @@ export function applyRemoteHit(s, bullet, io) {
   }
 }
 
+// Glowing bolt icon, pulsing as it waits.
+function drawPowerup(ctx, p) {
+  const r = POWERUP_SIZE / 2;
+  const cx = p.x + r;
+  const cy = p.y + r;
+  const pulse = 1 + 0.12 * Math.sin(p.ttl / 6);
+  ctx.save();
+  ctx.globalAlpha = p.ttl < 120 && Math.floor(p.ttl / 8) % 2 === 0 ? 0.35 : 1; // blink before it goes
+  ctx.shadowColor = '#facc15';
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = '#facc15';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#1f1f1f';
+  ctx.beginPath(); // lightning bolt
+  ctx.moveTo(cx + 3, cy - 11);
+  ctx.lineTo(cx - 7, cy + 2);
+  ctx.lineTo(cx - 1, cy + 2);
+  ctx.lineTo(cx - 3, cy + 11);
+  ctx.lineTo(cx + 7, cy - 2);
+  ctx.lineTo(cx + 1, cy - 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 // One bullet from the next barrel (the y offsets are the original const1/const2).
 function fire(s, sfx) {
   sfx('fire');
@@ -238,6 +276,7 @@ export function step(s, events, io) {
   // players' hits. Both hooks are absent in single-player.
   const world = io.takeWorld?.();
   if (world) applyWorld(s, world);
+  if (io.takeGameOver?.() && s.cont) s.lives = 0; // another player died: the game ends for everyone
   for (const bullet of io.takeEvents?.() ?? []) applyRemoteHit(s, bullet, io);
   const sfx = io.sfx || (() => {});
   const music = io.music || { play() {}, stop() {}, volume() {} };
@@ -266,8 +305,12 @@ export function step(s, events, io) {
   }
 
   if (s.fHeld && !s.firedThisFrame) {
-    s.fireTimer -= 1;
-    if (s.fireTimer <= 0) fire(s, sfx);
+    s.fireTimer -= s.boost > 0 ? BOOST : 1;
+    if (s.fireTimer <= 0) {
+      const carry = s.fireTimer; // keep the leftover so boosted gaps average 4.5 frames (exactly 2x)
+      fire(s, sfx);
+      s.fireTimer += carry;
+    }
   }
   s.firedThisFrame = false;
   for (const shot of s.shots) shot.x -= 13;
@@ -305,11 +348,13 @@ export function step(s, events, io) {
 
   if (levels <= 4) music.play();
 
-  s.x_change += s.accel_x;
-  s.y_change += s.accel_y;
+  const speed = s.boost > 0 ? BOOST : 1;
+  if (s.boost > 0) s.boost -= 1;
+  s.x_change += s.accel_x * speed;
+  s.y_change += s.accel_y * speed;
 
-  if (Math.abs(s.x_change) >= max_speed) s.x_change = (s.x_change / Math.abs(s.x_change)) * max_speed;
-  if (Math.abs(s.y_change) >= max_speed) s.y_change = (s.y_change / Math.abs(s.y_change)) * max_speed;
+  if (Math.abs(s.x_change) >= max_speed * speed) s.x_change = (s.x_change / Math.abs(s.x_change)) * max_speed * speed;
+  if (Math.abs(s.y_change) >= max_speed * speed) s.y_change = (s.y_change / Math.abs(s.y_change)) * max_speed * speed;
   if (s.enemy_accel >= 14) s.enemy_accel = (s.enemy_accel / s.enemy_accel) * 14;
   if (s.enemy_accel2 >= 12) s.enemy_accel2 = (s.enemy_accel2 / s.enemy_accel2) * 12;
   if (s.enemy_accel3 >= 18) s.enemy_accel3 = (s.enemy_accel3 / s.enemy_accel3) * 18;
@@ -338,6 +383,19 @@ export function step(s, events, io) {
   }
 
   const sprite = drawRect(ctx, s.player_color, s.x, s.y, 50, 50);
+  if (s.powerup) {
+    const p = s.powerup;
+    p.ttl -= 1;
+    if (collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE }) && s.cont) {
+      s.boost = BOOST_FRAMES;
+      s.powerup = null;
+      sfx('bounce');
+    } else if (p.ttl <= 0) {
+      s.powerup = null;
+    } else if (ctx) {
+      drawPowerup(ctx, p);
+    }
+  }
   drawRect(ctx, [255, 223, 0], s.new_x, s.new_y, 3, 15); // loaded lower bullet
   const shotRects = s.shots.map((shot) =>
     drawRect(ctx, shot.lower ? [255, 223, 0] : grey12, shot.x, shot.y, 3, 15)
@@ -495,6 +553,20 @@ export function step(s, events, io) {
       s.x_enemy3 = 0;
       sfx('hit');
     }
+  }
+
+  // a new multiple of 50 points drops a power-up somewhere on the map
+  const level = Math.floor(s.score / POWERUP_EVERY);
+  if (level > s.powerupLevel && s.cont) {
+    s.powerupLevel = level;
+    s.powerup = {
+      x: 40 + Math.random() * (WIDTH - 80 - POWERUP_SIZE),
+      y: 60 + Math.random() * (HEIGHT - 100 - POWERUP_SIZE),
+      ttl: POWERUP_FRAMES,
+    };
+  }
+  if (ctx && s.boost > 0 && s.cont) {
+    text(ctx, 'bold 18px Arial, sans-serif', `BOOST ${BOOST}x  ${(s.boost / 60).toFixed(1)}s`, [250, 204, 21], 110, 580);
   }
 
   s.death = Math.trunc(pyRound(s.lives));

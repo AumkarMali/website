@@ -216,6 +216,7 @@ const Game = ({ onClose }) => {
         // shared game (no-ops until the room is joined)
         takeWorld: () => mp?.takeWorld() ?? null,
         takeEvents: () => mp?.takeEvents() ?? [],
+        takeGameOver: () => mp?.takeGameOver() ?? false,
         report: (b) => mp?.report(b),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
       };
