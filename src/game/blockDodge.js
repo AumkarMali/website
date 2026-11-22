@@ -40,7 +40,11 @@ const MAX_LIVES = 3;
 // 30 s cooldown, and it can't be used in the first 10 s of the game.
 export const ULT_FRAMES = 10 * 60;
 export const ULT_WINDUP_FRAMES = 2 * 60;
+export const KING_FRAMES = 10 * 60; // King Crimson: 10 s of 25% world speed
+export const KING_WINDUP_FRAMES = 188; // ~3.13 s: let the "King Crimson" scream finish first
+const KING_FX_FRAMES = 5 * 60; // ripple length once the slow starts
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
+const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
 const ULT_FX_DELAY_FRAMES = 90; // the ripple starts 1.5 s after the clip starts
 const ULT_FX_CUT_FRAMES = 18; // the ripple stops 0.3 s before the clip ends
@@ -93,9 +97,10 @@ export const mathRandomRng = {
   randint: (a, b) => a + Math.floor(Math.random() * (b - a + 1)),
 };
 
-export function createState() {
+export function createState(ultType = 'world') {
   return {
     player_color: [0, 120, 250],
+    ultType, // 'world' (time stop) or 'king' (slowed random future)
     score: 0,
     lives: 3,
     x: 400,
@@ -148,6 +153,13 @@ export function createState() {
     ultAnim: 0, // frames since the ultimate started, for the ripple animation
     ultActivePrev: false, // last frame's ult state, so the clip/BGM trigger once
     ultCooldown: 0, // frames until the ultimate can be used again
+    slow: 0, // frames of King Crimson's 25% world speed left
+    slowBy: null, // id of the player who used King Crimson
+    kingWindup: 0, // frames of the King Crimson scream before the slow starts
+    slowAnim: 0, // frames since King Crimson's slow started, for its ripple
+    eraseSeq: 0, // bumps when King Crimson erases time, so guests roll back too
+    seenEraseSeq: 0, // last eraseSeq this client restored from
+    slowPrev: 0, // last frame's slow, so the snapshot is dropped when the slow ends
     speedBoost: 0, // frames of 2x speed left
     fireBoost: 0, // frames of 2x fire rate left
     knock: 0, // frames of knockback speed limit left
@@ -176,7 +188,7 @@ export const WORLD_KEYS = [
   'x_enemy2', 'rand2', 'x_enemy21', 'rand21', 'color2', 'color21', 'enemy_accel2',
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
-  'timeStop', 'timeStopBy', 'ultWindup',
+  'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -188,6 +200,54 @@ export const BULLET_KEYS = {
 export const getWorld = (s) => Object.fromEntries(WORLD_KEYS.map((k) => [k, s[k]]));
 export function applyWorld(s, w) {
   for (const k of WORLD_KEYS) if (k in w) s[k] = w[k];
+}
+
+// ---- King Crimson rollback ----
+// The exact state at the moment T is pressed is kept here; erasing the future restores it.
+const kingSnapshots = new WeakMap();
+const SNAP_KEEP = new Set([
+  'ultCooldown', 'ultType',
+  'arrows', 'arrowSeq', 'accel_x', 'accel_y', 'fHeld', 'firedThisFrame', 'fireTimer',
+  'ultActivePrev', 'eraseSeq', 'seenEraseSeq', 'slowPrev',
+]);
+const cloneState = (v) =>
+  (typeof structuredClone === 'function' ? structuredClone(v) : JSON.parse(JSON.stringify(v)));
+
+export function saveKingSnapshot(s) {
+  if (kingSnapshots.has(s)) return;
+  kingSnapshots.set(s, cloneState(s));
+}
+
+export function clearKingSnapshot(s) {
+  kingSnapshots.delete(s);
+}
+
+const hasKingSnapshot = (s) => kingSnapshots.has(s);
+
+// localOnly: guests keep the host's restored world and only roll their own player back.
+export function restoreKingSnapshot(s, localOnly = false) {
+  const snap = kingSnapshots.get(s);
+  if (!snap) return false;
+  const copy = cloneState(snap);
+  for (const k of Object.keys(copy)) {
+    if (SNAP_KEEP.has(k)) continue;
+    if (localOnly && WORLD_KEYS.includes(k)) continue;
+    s[k] = copy[k];
+  }
+  s.ultActivePrev = true; // let the BGM/audio transition run
+  kingSnapshots.delete(s);
+  return true;
+}
+
+export function eraseKing(s) {
+  restoreKingSnapshot(s);
+  s.kingWindup = 0;
+  s.slow = 0;
+  s.slowBy = null;
+  s.eraseSeq = (s.eraseSeq || 0) + 1;
+  s.seenEraseSeq = s.eraseSeq;
+  s.ultActivePrev = true;
+  kingSnapshots.delete(s);
 }
 
 // Where a new bullet aims: a random living player in multiplayer, otherwise you.
@@ -280,15 +340,21 @@ export function spawnPowerup(s, rng = Math.random) {
   });
 }
 
-// Ultimate: freeze time for everyone but the player who pressed T.
+// Ultimate: freeze time (The World) or slow the world and rewrite its future (King Crimson).
 function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
-  if (s.timeStop > 0 || s.ultWindup > 0) return;
+  if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
+  if (s.ultType === 'king') saveKingSnapshot(s); // rollback point for the erase
   s.ultCooldown = ULT_COOLDOWN;
-  if (io.startUlt?.(s)) return; // host took over, or a guest asked the host
-  s.ultWindup = ULT_WINDUP_FRAMES;
-  s.timeStopBy = io.selfId?.() ?? null;
+  if (io.startUlt?.(s, s.ultType)) return; // host took over, or a guest asked the host
+  if (s.ultType === 'king') {
+    s.kingWindup = KING_WINDUP_FRAMES;
+    s.slowBy = io.selfId?.() ?? null;
+  } else {
+    s.ultWindup = ULT_WINDUP_FRAMES;
+    s.timeStopBy = io.selfId?.() ?? null;
+  }
 }
 
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
@@ -349,22 +415,27 @@ function blit(ctx, img, x, y) {
 // Full-screen colour wash + expanding ripple for the ultimate. Drawn on the visible canvas
 // after the ghost players, so it tints everything and every client sees the same effect.
 export function drawUltOverlay(ctx, s) {
-  const active = s.timeStop > 0 || s.ultWindup > 0;
-  const t = s.ultAnim - ULT_FX_DELAY_FRAMES;
-  if (!ctx || !active || t <= 0) return;
+  const king = s.slow > 0;
+  const world = s.timeStop > 0 || s.ultWindup > 0;
+  if (!ctx || (!king && !world)) return;
+  const t = king ? s.slowAnim : s.ultAnim - ULT_FX_DELAY_FRAMES;
+  if (t <= 0) return;
   const cx = WIDTH / 2;
   const cy = HEIGHT / 2;
   // time slowly drains the colour while the stop lasts
   const wash = s.timeStop > 0 ? 0.22 : 0.08 + 0.12 * Math.min(1, t / ULT_WINDUP_FRAMES);
   ctx.save();
-  ctx.fillStyle = `rgba(90, 56, 200, ${wash})`;
+  ctx.fillStyle = king ? `rgba(170, 24, 48, ${wash})` : `rgba(90, 56, 200, ${wash})`;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
-  if (t <= ULT_FX_FRAMES) {
+  const fxFrames = king ? KING_FX_FRAMES : ULT_FX_FRAMES;
+  if (t <= fxFrames) {
     const LIFE = 96; // frames for one ripple to cross the screen
     for (let i = 0; i < 4; i += 1) {
       const phase = ((t + (i * LIFE) / 4) % LIFE) / LIFE;
       const radius = phase * 760;
-      ctx.strokeStyle = `rgba(205, 196, 255, ${(1 - phase) * 0.4})`;
+      ctx.strokeStyle = king
+        ? `rgba(255, 170, 170, ${(1 - phase) * 0.4})`
+        : `rgba(205, 196, 255, ${(1 - phase) * 0.4})`;
       ctx.lineWidth = 2 + 3 * (1 - phase);
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -383,7 +454,7 @@ export function drawUltOverlay(ctx, s) {
  * @param s       state from createState()
  * @param events  [{type: 'keydown'|'keyup', key: 'left'|'right'|'up'|'down'|'f'|'t'}] for this frame
  * @param io      { ctx?, images?: {heart, bullet}, rng, sfx?(name), music?: {play(), stop(), volume(v)},
- *                  isUlter?(s), startUlt?(s), selfId?(), ownsWorld?() }
+ *                  isUlter?(s), isSlowUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), ownsWorld?() }
  */
 export function step(s, events, io) {
   const { ctx = null, images = {}, rng = mathRandomRng } = io;
@@ -391,11 +462,18 @@ export function step(s, events, io) {
   // players' hits. Both hooks are absent in single-player.
   const world = io.takeWorld?.();
   if (world) applyWorld(s, world);
+  // King Crimson: snapshot the pre-ult state, and roll back when the host broadcasts an erase.
+  if ((s.kingWindup > 0 || s.slow > 0) && !hasKingSnapshot(s)) saveKingSnapshot(s);
+  if (s.eraseSeq !== s.seenEraseSeq) {
+    s.seenEraseSeq = s.eraseSeq;
+    restoreKingSnapshot(s, true);
+  }
   if (io.takeGameOver?.() && s.cont) s.lives = 0; // another player died: the game ends for everyone
   for (const bullet of io.takeEvents?.() ?? []) applyRemoteHit(s, bullet, io);
   const sfx = io.sfx || (() => {});
   const music = io.music || { play() {}, stop() {}, volume() {} };
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
+  const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
   for (const event of events) {
@@ -406,7 +484,17 @@ export function step(s, events, io) {
       if (event.key === 'up') s.accel_y = -0.2;
       if (event.key === 'down') s.accel_y = 0.2;
 
-      if (event.key === 't') tryUlt(s, io, frozenNow);
+      if (event.key === 't') {
+        if (s.slow > 0 && isSlowUlter(s)) {
+          // second press: erase the random future and return everyone to normal speed
+          io.stopUlt?.();
+          if (!io.cancelUlt?.(s)) {
+            eraseKing(s);
+          }
+        } else {
+          tryUlt(s, io, frozenNow);
+        }
+      }
       if (event.key === 'f') {
         s.fHeld = true;
         if (!frozenNow) fire(s, sfx);
@@ -422,34 +510,60 @@ export function step(s, events, io) {
     }
   }
 
-  // Host runs the ultimate clock: 2 s of windup (the game keeps playing), then the 10 s
-  // stop. Guests adopt both values from the world broadcast.
+  // Host runs the ultimate clock: the King Crimson scream, The World's 2 s windup, then the
+  // freeze or the 25% slow. Guests adopt all of it from the world broadcast.
   if (io.ownsWorld ? io.ownsWorld() : true) {
-    if (s.ultWindup > 0) {
+    if (s.kingWindup > 0) {
+      s.kingWindup -= 1;
+      if (s.kingWindup === 0) s.slow = KING_FRAMES;
+    } else if (s.ultWindup > 0) {
       s.ultWindup -= 1;
       if (s.ultWindup === 0) s.timeStop = ULT_FRAMES;
     } else if (s.timeStop > 0) {
       s.timeStop -= 1;
       if (s.timeStop === 0) s.timeStopBy = null;
+    } else if (s.slow > 0) {
+      s.slow -= 1;
+      if (s.slow === 0) s.slowBy = null;
     }
   }
 
+  // the rollback snapshot is only needed while King Crimson is running
+  if (s.slow === 0 && s.slowPrev > 0) clearKingSnapshot(s);
+  s.slowPrev = s.slow;
+
   const stopped = s.timeStop > 0;
   const frozen = stopped && !isUlter(s);
-  const ultActive = stopped || s.ultWindup > 0;
+  const slowActive = s.slow > 0;
+  const worldScale = slowActive ? SLOW : 1; // enemy bullets and the level clock
+  const selfScale = slowActive && !isSlowUlter(s) ? SLOW : 1; // everyone but the King Crimson user
+  const ultActive = stopped || s.ultWindup > 0 || slowActive || s.kingWindup > 0;
+
+  // King Crimson rewrites the future: the host periodically re-rolls the enemy lanes.
+  if (slowActive && (io.ownsWorld ? io.ownsWorld() : true) && s.slow % 40 === 0) {
+    s.rand = rng.randint(30, 540);
+    s.rand2 = rng.randint(30, 540);
+    s.rand21 = rng.randint(30, 540);
+    s.x_warn = rng.randint(30, 540);
+    s.rand3 = s.x_warn + 11;
+  }
+
   // the clip starts with the windup; the BGM stays off through the whole effect
   if (ultActive && !s.ultActivePrev) {
-    sfx('ult');
+    sfx(s.kingWindup > 0 || slowActive ? 'king' : 'ult');
     music.pause?.();
   } else if (!ultActive && s.ultActivePrev) {
+    io.stopUlt?.();
     music.resume?.();
   }
   s.ultActivePrev = ultActive;
   if (ultActive) s.ultAnim += 1;
   else s.ultAnim = 0;
+  if (slowActive) s.slowAnim += 1;
+  else s.slowAnim = 0;
 
   if (s.fHeld && !s.firedThisFrame && !frozen) {
-    s.fireTimer -= s.fireBoost > 0 ? BOOST : 1;
+    s.fireTimer -= (s.fireBoost > 0 ? BOOST : 1) * selfScale;
     if (s.fireTimer <= 0) {
       const carry = s.fireTimer; // keep the leftover so boosted gaps average 4.5 frames (exactly 2x)
       fire(s, sfx);
@@ -457,7 +571,7 @@ export function step(s, events, io) {
     }
   }
   s.firedThisFrame = false;
-  if (!frozen) for (const shot of s.shots) shot.x -= 13;
+  if (!frozen) for (const shot of s.shots) shot.x -= 13 * selfScale;
   s.shots = s.shots.filter((shot) => shot.x > -60);
   s.new_x = s.x + 10;
   s.new_y = s.y + 50;
@@ -466,7 +580,7 @@ export function step(s, events, io) {
 
   music.volume(s.fade_in);
   s.fade_in += 0.0017;
-  if (!stopped) s.timer += 0.02;
+  if (!stopped) s.timer += 0.02 * worldScale;
   if (!stopped && s.ultCooldown > 0) s.ultCooldown -= 1;
   const levels = pyRound(s.timer);
 
@@ -494,10 +608,10 @@ export function step(s, events, io) {
   if (!stopped && levels <= 4) music.play();
 
   if (!frozen) {
-    const speed = s.speedBoost > 0 ? BOOST : 1;
+    const speed = (s.speedBoost > 0 ? BOOST : 1) * selfScale;
     if (s.speedBoost > 0) s.speedBoost -= 1;
     if (s.fireBoost > 0) s.fireBoost -= 1;
-    const cap = s.knock > 0 ? s.knockCap : max_speed * speed;
+    const cap = s.knock > 0 ? s.knockCap * selfScale : max_speed * speed;
     if (s.knock > 0) s.knock -= 1;
     s.x_change += s.accel_x * speed;
     s.y_change += s.accel_y * speed;
@@ -594,9 +708,9 @@ export function step(s, events, io) {
 
   if (!stopped) {
     s.enemy_accel += 0.001;
-    s.x_enemy += s.enemy_accel;
+    s.x_enemy += s.enemy_accel * worldScale;
 
-    s.x_enemy3 += 0.01;
+    s.x_enemy3 += 0.01 * worldScale;
 
     if (collide(bullet, wall2)) {
       s.x_enemy = 0;
@@ -634,8 +748,8 @@ export function step(s, events, io) {
 
     if (levels >= 30 && s.cont === true) {
       s.enemy_accel2 += 0.0001;
-      s.x_enemy2 += s.enemy_accel2;
-      s.x_enemy21 -= s.enemy_accel2;
+      s.x_enemy2 += s.enemy_accel2 * worldScale;
+      s.x_enemy21 -= s.enemy_accel2 * worldScale;
       s.bullet_types = 'Bullets: Normal, Shotgun';
 
       if (collide(bullet2, wall2)) {
@@ -689,7 +803,7 @@ export function step(s, events, io) {
 
     if (levels >= 59 && s.cont === true) {
       s.enemy_accel3 += 0.07;
-      s.x_enemy3 += s.enemy_accel3 * SNIPER_SPEED;
+      s.x_enemy3 += s.enemy_accel3 * SNIPER_SPEED * worldScale;
       s.Warn_goto = 0;
       s.bullet_types = 'Bullets: Normal, Shotgun, Sniper';
 
@@ -819,14 +933,21 @@ export function step(s, events, io) {
       text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
     }
     const ultLocked = s.timer < ULT_MIN_TIMER;
-    const ultColor = s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
+    const ultColor = s.slow > 0 || s.kingWindup > 0
+      ? [248, 113, 113]
+      : s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
     const ultLabel = s.timeStop > 0
       ? `TIME STOP  ${(s.timeStop / 60).toFixed(1)}s`
       : s.ultWindup > 0
         ? `TIME STOP IN  ${(s.ultWindup / 60).toFixed(1)}s`
-        : ultLocked
-          ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
-          : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s` : 'ULT READY  [T]';
+        : s.slow > 0
+          ? `KING CRIMSON  ${(s.slow / 60).toFixed(1)}s`
+          : s.kingWindup > 0
+            ? `KING CRIMSON IN  ${(s.kingWindup / 60).toFixed(1)}s`
+            : ultLocked
+              ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
+              : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
+                : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
     text(ctx, 'bold 18px Arial, sans-serif', ultLabel, ultColor, 680, 580);
   }
 

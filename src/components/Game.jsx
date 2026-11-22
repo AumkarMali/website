@@ -30,6 +30,12 @@ function createAudio() {
   ultGain.connect(ac.destination);
   let ultBuffer = null;
   let ultSource = null;
+  // King Crimson's scream plays at its own level before the slow starts
+  const kingGain = ac.createGain();
+  kingGain.gain.value = 1;
+  kingGain.connect(ac.destination);
+  let kingBuffer = null;
+  let kingSource = null;
   let musicSource = null;
   let musicStartedAt = null; // ac time of the last mixer.music.play()
   let musicPausedAt = null; // seconds into the track when paused (time stop)
@@ -61,6 +67,11 @@ function createAudio() {
     .then((b) => ac.decodeAudioData(b))
     .then((buf) => { ultBuffer = buf; })
     .catch(() => {});
+  fetch('/game/kingcrimson.mp3')
+    .then((r) => r.arrayBuffer())
+    .then((b) => ac.decodeAudioData(b))
+    .then((buf) => { kingBuffer = buf; })
+    .catch(() => {});
   // The music file is large; if it decodes late, join at the right position.
   load('music').then(() => {
     if (musicStartedAt !== null && buffers.music) startMusic(Math.max(0, ac.currentTime - musicStartedAt));
@@ -69,7 +80,23 @@ function createAudio() {
   return {
     ready,
     resume: () => ac.resume().catch(() => {}),
+    stopUlt: () => {
+      try { ultSource?.stop(); } catch { /* ended */ }
+      try { kingSource?.stop(); } catch { /* ended */ }
+      ultSource = null;
+      kingSource = null;
+    },
     sfx(name) {
+      if (name === 'king') {
+        if (!kingBuffer) return;
+        const src = ac.createBufferSource();
+        src.buffer = kingBuffer;
+        src.connect(kingGain);
+        src.onended = () => { if (kingSource === src) kingSource = null; };
+        kingSource = src;
+        src.start();
+        return;
+      }
       if (name === 'ult') {
         if (!ultBuffer) return;
         const src = ac.createBufferSource();
@@ -135,7 +162,9 @@ function createAudio() {
       musicStartedAt = null;
       stopMusic();
       try { ultSource?.stop(); } catch { /* ended */ }
+      try { kingSource?.stop(); } catch { /* ended */ }
       ultSource = null;
+      kingSource = null;
       active.forEach((s) => { try { s.stop(); } catch { /* ended */ } });
       ac.close().catch(() => {});
     },
@@ -168,6 +197,7 @@ const Game = ({ onClose }) => {
   const queue = useRef([]);
   const held = useRef(new Set());
   const [run, setRun] = useState(0); // bump to restart, like relaunching the program
+  const [character, setCharacter] = useState(null); // null = pick screen
   const [touch] = useState(() => window.matchMedia('(pointer: coarse)').matches);
   const [name, setName] = useState(
     () => localStorage.getItem(NAME_KEY) || `Player ${Math.floor(1000 + Math.random() * 9000)}`
@@ -229,6 +259,7 @@ const Game = ({ onClose }) => {
 
   // Game loop: one step() per 1/60 s, like clock.tick(60).
   useEffect(() => {
+    if (!character) return undefined; // waiting on the ultimate pick
     let cancelled = false;
     let raf;
     const audio = createAudio();
@@ -237,7 +268,7 @@ const Game = ({ onClose }) => {
     off.height = HEIGHT;
     const offCtx = off.getContext('2d');
     const screen = canvasRef.current.getContext('2d');
-    const state = createState();
+    const state = createState(character);
     queue.current = [];
     held.current.clear();
     let mp = null; // multiplayer room, joined once the game starts
@@ -258,8 +289,11 @@ const Game = ({ onClose }) => {
         takeGameOver: () => mp?.takeGameOver() ?? false,
         report: (b) => mp?.report(b),
         reportPickup: (powerupId) => mp?.reportPickup(powerupId),
-        startUlt: (st) => mp?.startUlt(st) ?? false,
+        startUlt: (st, type) => mp?.startUlt(st, type) ?? false,
+        cancelUlt: (st) => mp?.cancelUlt(st) ?? false,
+        stopUlt: () => audio.stopUlt(),
         isUlter: (st) => st.timeStopBy == null || (mp ? mp.isUlter(st) : true),
+        isSlowUlter: (st) => (mp ? mp.isSlowUlter(st) : true),
         selfId: () => mp?.playerId() ?? null,
         ownsWorld: () => !mp || mp.isHost() || !mp.isSynced(),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
@@ -307,7 +341,7 @@ const Game = ({ onClose }) => {
       cancelAnimationFrame(raf);
       audio.close();
     };
-  }, [run]);
+  }, [run, character]);
 
   return createPortal(
     <motion.div
@@ -345,7 +379,7 @@ const Game = ({ onClose }) => {
             </div>
           )}
           <div className="flex items-center gap-1">
-            <button onClick={() => setRun((r) => r + 1)} className="rounded p-1 hover:bg-neutral-300" aria-label="Restart" title="Restart">
+            <button onClick={() => { setCharacter(null); setRun((r) => r + 1); }} className="rounded p-1 hover:bg-neutral-300" aria-label="Restart" title="Restart">
               <RotateCcw size={14} />
             </button>
             <button onClick={onClose} className="rounded p-1 hover:bg-red-500 hover:text-white" aria-label="Close game" title="Close">
@@ -353,10 +387,36 @@ const Game = ({ onClose }) => {
             </button>
           </div>
         </div>
-        <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="block aspect-[4/3] w-full bg-[#1f1f1f]" />
+        {character ? (
+          <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="block aspect-[4/3] w-full bg-[#1f1f1f]" />
+        ) : (
+          <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-5 overflow-y-auto bg-[#141019] p-5">
+            <h2 className="text-center text-xl font-semibold text-white">Choose your ultimate</h2>
+            <div className="grid w-full max-w-2xl gap-4 sm:grid-cols-2">
+              <button
+                onClick={() => setCharacter('world')}
+                className="rounded-xl border border-violet-400/40 bg-violet-500/10 p-5 text-left transition hover:border-violet-300 hover:bg-violet-500/20"
+              >
+                <span className="block text-lg font-bold text-violet-200">The World</span>
+                <span className="mt-2 block text-sm text-white/60">
+                  Stop time for 10 seconds. Only you can move, shoot and collect power-ups.
+                </span>
+              </button>
+              <button
+                onClick={() => setCharacter('king')}
+                className="rounded-xl border border-red-400/40 bg-red-500/10 p-5 text-left transition hover:border-red-300 hover:bg-red-500/20"
+              >
+                <span className="block text-lg font-bold text-red-200">King Crimson</span>
+                <span className="mt-2 block text-sm text-white/60">
+                  Slow the world to 25% for 10 seconds and rewrite its future. You keep full speed — press T again to erase it and roll everything back.
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
       </motion.div>
 
-      {touch ? (
+      {character && (touch ? (
         <div className="flex w-full max-w-[800px] items-center justify-between px-2">
           <div className="grid grid-cols-3 gap-2">
             <span />
@@ -374,9 +434,9 @@ const Game = ({ onClose }) => {
       ) : (
         <p className="text-center text-sm text-white/60">
           Press <kbd className="kbd">← ↑ ↓ →</kbd> to move around · press <kbd className="kbd">F</kbd> to fire, hold it to rapid-fire ·{' '}
-          <kbd className="kbd">T</kbd> to stop time · <kbd className="kbd">Esc</kbd> to close
+          <kbd className="kbd">T</kbd> to use your ultimate · <kbd className="kbd">Esc</kbd> to close
         </p>
-      )}
+      ))}
     </motion.div>,
     document.body
   );

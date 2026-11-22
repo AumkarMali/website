@@ -6,13 +6,16 @@
 // host, who resets that bullet for everyone. Each player also broadcasts its block and its
 // own shots, drawn translucent on everyone else's screen. Lives and score are per player.
 // Power-up icons are shared: any multiple of 50 points (from any player) drops one on the
-// map, and whoever touches it first gets the boost. The ultimate (T) runs a 2 s windup and
-// then freezes the shared world for 10 s while the player who used it keeps moving; the host
-// owns that clock too. When any player dies, the game ends for everyone in it.
+// map, and whoever touches it first gets the boost. The ultimate (T) depends on the pick:
+// The World runs a 2 s windup then freezes everything for 10 s; King Crimson slows the world
+// to 25% for 10 s, re-rolls enemy lanes, and only its user moves at full speed. Its user can
+// press T again to erase the remaining future and roll the world and every player back to the
+// exact state when it was activated. The host owns both clocks. When any player dies, the game
+// ends for everyone in it.
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, ULT_MIN_TIMER } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -25,6 +28,7 @@ const PICKUP_HOLD_MS = 3000; // a guest ignores a power-up it just took while th
 const POWERUP_EVERY = 50;
 const SMOOTH = 0.25; // per-frame approach to a ghost's latest position (hides the 10 Hz steps)
 const SHOT_SPEED = 13; // matches the game: shots move 13 px per frame
+const KING_SLOW = 0.25; // King Crimson: everything but the user moves at 25%
 const MAX_SHOTS = 24;
 const COLORS = ['#f97316', '#22c55e', '#e879f9', '#facc15', '#38bdf8', '#f43f5e'];
 
@@ -64,6 +68,7 @@ export function connect(name, onCount) {
   const events = [];
   const pickups = []; // host: power-up ids other players took since last frame
   const ultRequests = []; // host: player ids who pressed T since last frame
+  const eraseRequests = []; // host: King Crimson users who pressed T again to cancel
   const taken = new Map(); // guest: power-up id -> hold-until time
   let gameOver = false; // another player died
   const holds = new Map(); // bullet -> hold-until time
@@ -109,7 +114,10 @@ export function connect(name, onCount) {
       if (p?.powerupId && isHost()) pickups.push(p.powerupId);
     })
     .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
-      if (p?.from && isHost()) ultRequests.push(p.from);
+      if (p?.from && isHost()) ultRequests.push({ id: p.from, type: p.type });
+    })
+    .on('broadcast', { event: 'erase' }, ({ payload: p }) => {
+      if (p?.from && isHost()) eraseRequests.push(p.from);
     })
     .on('presence', { event: 'sync' }, () => {
       const online = channel.presenceState();
@@ -136,10 +144,21 @@ export function connect(name, onCount) {
         s.powerups = (s.powerups || []).filter((p) => !gone.has(p.id));
       }
       if (ultRequests.length && isHost()) {
-        for (const uid of ultRequests.splice(0)) {
-          if (s.timeStop > 0 || s.ultWindup > 0 || s.timer < ULT_MIN_TIMER) break;
-          s.ultWindup = ULT_WINDUP_FRAMES;
-          s.timeStopBy = uid;
+        for (const req of ultRequests.splice(0)) {
+          if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
+          if (req.type === 'king') {
+            saveKingSnapshot(s);
+            s.kingWindup = KING_WINDUP_FRAMES;
+            s.slowBy = req.id;
+          } else {
+            s.ultWindup = ULT_WINDUP_FRAMES;
+            s.timeStopBy = req.id;
+          }
+        }
+      }
+      if (eraseRequests.length && isHost()) {
+        for (const uid of eraseRequests.splice(0)) {
+          if (s.slow > 0 && s.slowBy === uid) eraseKing(s);
         }
       }
       for (const g of ghosts.values()) {
@@ -207,20 +226,40 @@ export function connect(name, onCount) {
       channel.send({ type: 'broadcast', event: 'pickup', payload: { powerupId } });
     },
 
-    startUlt(s) {
+    startUlt(s, type) {
       if (isHost()) {
-        if (s.timeStop > 0 || s.ultWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
-        s.ultWindup = ULT_WINDUP_FRAMES;
-        s.timeStopBy = id;
+        if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
+        if (type === 'king') {
+          saveKingSnapshot(s);
+          s.kingWindup = KING_WINDUP_FRAMES;
+          s.slowBy = id;
+        } else {
+          s.ultWindup = ULT_WINDUP_FRAMES;
+          s.timeStopBy = id;
+        }
         return true;
       }
       if (!synced) return false;
-      channel.send({ type: 'broadcast', event: 'ult', payload: { from: id } });
+      channel.send({ type: 'broadcast', event: 'ult', payload: { from: id, type } });
       return true;
     },
 
     isUlter(s) {
       return s.timeStopBy === id;
+    },
+
+    isSlowUlter(s) {
+      return s.slowBy === id;
+    },
+
+    cancelUlt(s) {
+      if (isHost()) {
+        if (s.slow > 0 && s.slowBy === id) eraseKing(s);
+        return true;
+      }
+      if (!synced) return false;
+      channel.send({ type: 'broadcast', event: 'erase', payload: { from: id } });
+      return true;
     },
 
     playerId() {
@@ -242,6 +281,8 @@ export function connect(name, onCount) {
       const now = performance.now();
       const stopped = (state?.timeStop ?? 0) > 0;
       const stopper = state?.timeStopBy ?? null;
+      const king = (state?.slow ?? 0) > 0;
+      const kingBy = state?.slowBy ?? null;
       ctx.save();
       ctx.font = '12px Poppins, Arial, sans-serif';
       ctx.textAlign = 'center';
@@ -252,6 +293,7 @@ export function connect(name, onCount) {
         }
         // during a time stop everyone but the player who used it stands still
         const frozenGhost = stopped && gid !== stopper;
+        const slowGhost = king && gid !== kingBy;
         if (!frozenGhost) {
           g.x += (g.tx - g.x) * SMOOTH;
           g.y += (g.ty - g.y) * SMOOTH;
@@ -259,7 +301,7 @@ export function connect(name, onCount) {
         // their shots keep flying between updates, unless time is stopped
         ctx.globalAlpha = frozenGhost ? 0.25 : 0.4;
         for (const shot of g.shots) {
-          if (!frozenGhost) shot.x -= SHOT_SPEED;
+          if (!frozenGhost) shot.x -= SHOT_SPEED * (slowGhost ? KING_SLOW : 1);
           if (images.bullet) ctx.drawImage(images.bullet, Math.trunc(shot.x - 5), Math.trunc(shot.y - 1));
           else {
             ctx.fillStyle = g.color;
