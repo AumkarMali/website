@@ -22,13 +22,19 @@ export const HEIGHT = 600;
 export const FPS = 60;
 const FIRE_EVERY = 9; // frames between shots while F is held: 0.15 s at 60 FPS
 const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
-// Power-up: each multiple of 50 points drops a bolt icon at a random spot; touching it
-// gives BOOST_FRAMES of 2x movement speed and 2x fire rate.
+// Power-up: each multiple of 50 points drops a random icon at a random spot: 10 s of 2x
+// speed, 10 s of 2x fire rate, or an extra life (up to MAX_LIVES).
 const POWERUP_EVERY = 50;
 const POWERUP_FRAMES = 10 * 60; // icon disappears if not picked up in 10 s
 const POWERUP_SIZE = 30;
-const BOOST_FRAMES = 5 * 60;
+const BOOST_FRAMES = 10 * 60;
 const BOOST = 2;
+const POWERUP_TYPES = ['speed', 'fire', 'life'];
+const MAX_LIVES = 4;
+// After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
+// can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
+const KNOCK_FRAMES = 15;
+const RECOIL_CAP = 7 / 2;
 
 const NAMED = {
   grey12: 'rgb(31,31,31)',
@@ -121,7 +127,10 @@ export function createState() {
     fireTimer: 0, // frames until the next held-F shot
     powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
     powerup: null, // { x, y, ttl } while an icon is on the map
-    boost: 0, // frames of boost left
+    speedBoost: 0, // frames of 2x speed left
+    fireBoost: 0, // frames of 2x fire rate left
+    knock: 0, // frames of knockback speed limit left
+    knockCap: 7,
     firedThisFrame: false,
     fade_in: 0,
     movement_y: 0,
@@ -188,32 +197,50 @@ export function applyRemoteHit(s, bullet, io) {
   }
 }
 
-// Glowing bolt icon, pulsing as it waits.
-function drawPowerup(ctx, p) {
+// Glowing power-up icon, pulsing as it waits: bolt (speed), bullet (fire rate), heart (life).
+function drawPowerup(ctx, p, images = {}) {
   const r = POWERUP_SIZE / 2;
   const cx = p.x + r;
   const cy = p.y + r;
   const pulse = 1 + 0.12 * Math.sin(p.ttl / 6);
+  const color = { speed: '#facc15', fire: '#fb923c', life: '#ef4444' }[p.type];
   ctx.save();
   ctx.globalAlpha = p.ttl < 120 && Math.floor(p.ttl / 8) % 2 === 0 ? 0.35 : 1; // blink before it goes
-  ctx.shadowColor = '#facc15';
+  ctx.shadowColor = color;
   ctx.shadowBlur = 18;
-  ctx.fillStyle = '#facc15';
-  ctx.beginPath();
-  ctx.arc(cx, cy, r * pulse, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = '#1f1f1f';
-  ctx.beginPath(); // lightning bolt
-  ctx.moveTo(cx + 3, cy - 11);
-  ctx.lineTo(cx - 7, cy + 2);
-  ctx.lineTo(cx - 1, cy + 2);
-  ctx.lineTo(cx - 3, cy + 11);
-  ctx.lineTo(cx + 7, cy - 2);
-  ctx.lineTo(cx + 1, cy - 2);
-  ctx.closePath();
-  ctx.fill();
+  if (p.type === 'life' && images.heart) {
+    const size = 34 * pulse;
+    ctx.drawImage(images.heart, cx - size / 2, cy - size / 2, size, (size * 35) / 38);
+  } else {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    if (p.type === 'fire' && images.bullet) {
+      ctx.drawImage(images.bullet, cx - 11, cy - 11, 22, 11);
+      ctx.drawImage(images.bullet, cx - 11, cy + 1, 22, 11);
+    } else {
+      ctx.fillStyle = '#1f1f1f';
+      ctx.beginPath(); // lightning bolt
+      ctx.moveTo(cx + 3, cy - 11);
+      ctx.lineTo(cx - 7, cy + 2);
+      ctx.lineTo(cx - 1, cy + 2);
+      ctx.lineTo(cx - 3, cy + 11);
+      ctx.lineTo(cx + 7, cy - 2);
+      ctx.lineTo(cx + 1, cy - 2);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
   ctx.restore();
+}
+
+// Knockback: for a moment the speed limit is `cap`, whatever boost is active.
+function knock(s, cap) {
+  s.knock = KNOCK_FRAMES;
+  s.knockCap = cap;
+  if (Math.abs(s.x_change) > cap) s.x_change = Math.sign(s.x_change) * cap;
 }
 
 // One bullet from the next barrel (the y offsets are the original const1/const2).
@@ -305,7 +332,7 @@ export function step(s, events, io) {
   }
 
   if (s.fHeld && !s.firedThisFrame) {
-    s.fireTimer -= s.boost > 0 ? BOOST : 1;
+    s.fireTimer -= s.fireBoost > 0 ? BOOST : 1;
     if (s.fireTimer <= 0) {
       const carry = s.fireTimer; // keep the leftover so boosted gaps average 4.5 frames (exactly 2x)
       fire(s, sfx);
@@ -348,13 +375,16 @@ export function step(s, events, io) {
 
   if (levels <= 4) music.play();
 
-  const speed = s.boost > 0 ? BOOST : 1;
-  if (s.boost > 0) s.boost -= 1;
+  const speed = s.speedBoost > 0 ? BOOST : 1;
+  if (s.speedBoost > 0) s.speedBoost -= 1;
+  if (s.fireBoost > 0) s.fireBoost -= 1;
+  const cap = s.knock > 0 ? s.knockCap : max_speed * speed;
+  if (s.knock > 0) s.knock -= 1;
   s.x_change += s.accel_x * speed;
   s.y_change += s.accel_y * speed;
 
-  if (Math.abs(s.x_change) >= max_speed * speed) s.x_change = (s.x_change / Math.abs(s.x_change)) * max_speed * speed;
-  if (Math.abs(s.y_change) >= max_speed * speed) s.y_change = (s.y_change / Math.abs(s.y_change)) * max_speed * speed;
+  if (Math.abs(s.x_change) >= cap) s.x_change = (s.x_change / Math.abs(s.x_change)) * cap;
+  if (Math.abs(s.y_change) >= cap) s.y_change = (s.y_change / Math.abs(s.y_change)) * cap;
   if (s.enemy_accel >= 14) s.enemy_accel = (s.enemy_accel / s.enemy_accel) * 14;
   if (s.enemy_accel2 >= 12) s.enemy_accel2 = (s.enemy_accel2 / s.enemy_accel2) * 12;
   if (s.enemy_accel3 >= 18) s.enemy_accel3 = (s.enemy_accel3 / s.enemy_accel3) * 18;
@@ -387,13 +417,15 @@ export function step(s, events, io) {
     const p = s.powerup;
     p.ttl -= 1;
     if (collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE }) && s.cont) {
-      s.boost = BOOST_FRAMES;
+      if (p.type === 'speed') s.speedBoost = BOOST_FRAMES;
+      else if (p.type === 'fire') s.fireBoost = BOOST_FRAMES;
+      else s.lives = Math.min(MAX_LIVES, s.lives + 1);
       s.powerup = null;
       sfx('bounce');
     } else if (p.ttl <= 0) {
       s.powerup = null;
     } else if (ctx) {
-      drawPowerup(ctx, p);
+      drawPowerup(ctx, p, images);
     }
   }
   drawRect(ctx, [255, 223, 0], s.new_x, s.new_y, 3, 15); // loaded lower bullet
@@ -458,6 +490,7 @@ export function step(s, events, io) {
     io.report?.('b1');
     s.x_enemy = 0;
     s.x_change += 40;
+    knock(s, max_speed);
     s.lives -= 1;
     s.rand = rng.randint(30, 540);
     sfx('ricochet');
@@ -487,6 +520,7 @@ export function step(s, events, io) {
       io.report?.('b2');
       s.x_enemy2 = 0;
       s.x_change += 40;
+      knock(s, max_speed);
       s.lives -= 1;
       s.rand2 = rng.randint(30, 540);
       sfx('ricochet');
@@ -495,7 +529,8 @@ export function step(s, events, io) {
     if (shotHits(bullet2)) {
       io.report?.('b2');
       s.x_enemy2 = 0;
-      s.x_change += 40;
+      s.x_change += 20;
+      knock(s, RECOIL_CAP);
       s.rand2 = rng.randint(30, 540);
       sfx('hit');
     }
@@ -510,6 +545,7 @@ export function step(s, events, io) {
       io.report?.('b21');
       s.x_enemy21 = 780;
       s.x_change -= 40;
+      knock(s, max_speed);
       s.lives -= 1;
       s.rand21 = rng.randint(30, 540);
       sfx('ricochet');
@@ -541,6 +577,7 @@ export function step(s, events, io) {
     if (collide(bullet3, sprite)) {
       io.report?.('b3');
       s.x_change += 40;
+      knock(s, max_speed);
       s.lives -= 1;
       s.rand3 = s.x_warn + 11;
       s.x_enemy3 = 0;
@@ -563,10 +600,18 @@ export function step(s, events, io) {
       x: 40 + Math.random() * (WIDTH - 80 - POWERUP_SIZE),
       y: 60 + Math.random() * (HEIGHT - 100 - POWERUP_SIZE),
       ttl: POWERUP_FRAMES,
+      type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)],
     };
   }
-  if (ctx && s.boost > 0 && s.cont) {
-    text(ctx, 'bold 18px Arial, sans-serif', `BOOST ${BOOST}x  ${(s.boost / 60).toFixed(1)}s`, [250, 204, 21], 110, 580);
+  if (ctx && s.cont) {
+    let hudY = 580;
+    if (s.speedBoost > 0) {
+      text(ctx, 'bold 18px Arial, sans-serif', `SPEED ${BOOST}x  ${(s.speedBoost / 60).toFixed(1)}s`, [250, 204, 21], 110, hudY);
+      hudY -= 24;
+    }
+    if (s.fireBoost > 0) {
+      text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
+    }
   }
 
   s.death = Math.trunc(pyRound(s.lives));
@@ -601,16 +646,9 @@ export function step(s, events, io) {
     s.final_score = 'Final score: ' + Math.trunc(s.score);
   }
 
-  if (s.death === 3) {
-    blit(ctx, images.heart, 500, 2);
-    blit(ctx, images.heart, 545, 2);
-    blit(ctx, images.heart, 590, 2);
-  } else if (s.death === 2) {
-    blit(ctx, images.heart, 500, 2);
-    blit(ctx, images.heart, 545, 2);
-  } else if (s.death === 1) {
-    blit(ctx, images.heart, 500, 2);
-  }
+  // Same hearts as the original; a 4th (extra life) packs them a little closer.
+  const gap = s.death > 3 ? 34 : 45;
+  for (let h = 0; h < s.death; h += 1) blit(ctx, images.heart, 500 + h * gap, 2);
 
   blit(ctx, images.bullet, s.new_x - 5, s.new_y - 1); // loaded bullets
   blit(ctx, images.bullet, s.new_x2 - 5, s.new_y2 - 1);
