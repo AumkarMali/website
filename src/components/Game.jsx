@@ -567,7 +567,7 @@ const Game = ({ onClose }) => {
               >
                 <span className="block text-base font-bold text-slate-100">Silver Chariot</span>
                 <span className="mt-2 block text-sm text-white/60">
-                  Multiplayer only: for 100 seconds every player's ultimate is randomly swapped to a different one.
+                  For 100 seconds every player's ultimate is randomly swapped to a different one (just yours in single-player).
                 </span>
               </button>
             </div>

@@ -242,6 +242,14 @@ const addBuff = (list, id, frames) => {
   if (!hasBuff(list, id)) list.push({ id, frames });
 };
 
+const COMBAT_ULTS = ['world', 'king', 'killer', 'd4c', 'cmoon'];
+// Single-player Silver Chariot: reroll the local player's ult for 100 s.
+function beginSilverLocal(s, selfId) {
+  const pool = COMBAT_ULTS.filter((t) => t !== s.baseUltType);
+  s.silver = SILVER_FRAMES;
+  s.silverTypes = { [selfId]: pool[Math.floor(Math.random() * pool.length)] };
+}
+
 // ---- King Crimson rollback ----
 // The exact state at the moment T is pressed is kept here; erasing the future restores it.
 const kingSnapshots = new WeakMap();
@@ -417,13 +425,17 @@ function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
   if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
-  // Silver Chariot only works in a shared game, and only when no swap is already running.
+  // Silver Chariot: swap every player's ult. Single-player rerolls only yourself.
   if (s.ultType === 'silver') {
-    if (!io.online?.() || s.silver > 0) return;
+    if (s.silver > 0) return;
     s.ultCooldown = ULT_COOLDOWN;
     io.sfx?.('silver');
-    io.sendUltSound?.('silver');
-    io.startUlt?.(s, 'silver');
+    if (io.online?.()) {
+      io.sendUltSound?.('silver');
+      io.startUlt?.(s, 'silver');
+    } else {
+      beginSilverLocal(s, io.selfId?.() ?? null);
+    }
     return;
   }
   const selfId = io.selfId?.() ?? null;
@@ -1415,7 +1427,7 @@ export function step(s, events, io) {
                     ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
                     : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
                       : s.ultType === 'silver'
-                        ? (io.online?.() ? 'SILVER CHARIOT READY [T]' : 'SILVER CHARIOT (MULTIPLAYER ONLY)')
+                        ? 'SILVER CHARIOT READY [T]'
                         : s.ultType === 'cmoon' ? 'C-MOON READY [T]'
                           : s.ultType === 'd4c' ? 'D4C READY [T]'
                             : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
