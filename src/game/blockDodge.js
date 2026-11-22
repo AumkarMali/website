@@ -43,7 +43,7 @@ export const ULT_WINDUP_FRAMES = 2 * 60;
 export const KING_FRAMES = 10 * 60; // King Crimson: 10 s of 25% world speed
 export const KING_WINDUP_FRAMES = 110; // ~1.83 s: the effect starts 1.3 s into the scream
 const KING_FX_FRAMES = 60; // ripple runs for 1 s, then the red shade takes over
-export const KILLER_FRAMES = 30 * 60; // Killer Queen: 30 s of blast-radius shots
+export const KILLER_FRAMES = 10 * 60; // Killer Queen: 10 s of blast-radius shots
 const KILLER_RADIUS = 140; // px destroyed around each shot hit
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
@@ -546,7 +546,8 @@ export function drawUltOverlay(ctx, s) {
  * @param s       state from createState()
  * @param events  [{type: 'keydown'|'keyup', key: 'left'|'right'|'up'|'down'|'f'|'t'}] for this frame
  * @param io      { ctx?, images?: {heart, bullet}, rng, sfx?(name), music?: {play(), stop(), volume(v)},
- *                  isUlter?(s), isSlowUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), ownsWorld?() }
+ *                  isUlter?(s), isSlowUlter?(s), isKillerUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), ownsWorld?(),
+ *                  takeBooms?(), sendBoom?(x, y) }
  */
 export function step(s, events, io) {
   const { ctx = null, images = {}, rng = mathRandomRng } = io;
@@ -565,6 +566,10 @@ export function step(s, events, io) {
     s.remoteKO = true;
   }
   for (const bullet of io.takeEvents?.() ?? []) applyRemoteHit(s, bullet, io);
+  // other players' Killer Queen blasts
+  for (const b of io.takeBooms?.() ?? []) {
+    s.explosions.push({ x: b.x, y: b.y, ttl: BIG_EXPLOSION_FRAMES, max: BIG_EXPLOSION_FRAMES, size: KILLER_RADIUS });
+  }
   const sfx = io.sfx || (() => {});
   const music = io.music || { play() {}, stop() {}, volume() {} };
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
@@ -811,6 +816,7 @@ export function step(s, events, io) {
     spawnExplosion(s, rect, true);
     const cx = rect.x + rect.w / 2;
     const cy = rect.y + rect.h / 2;
+    io.sendBoom?.(cx, cy); // let the other players see the blast too
     const targets = [['b1', bullet]];
     if (levels >= 30) targets.push(['b2', bullet2], ['b21', bullet21]);
     if (levels >= 59) targets.push(['b3', bullet3]);

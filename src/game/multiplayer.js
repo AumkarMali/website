@@ -66,6 +66,7 @@ export function connect(name, onCount) {
   let pendingWorld = null;
   let worldFrom = null; // host id of pendingWorld
   const events = [];
+  const booms = []; // explosions from other players' Killer Queen shots
   const pickups = []; // host: power-up ids other players took since last frame
   const ultRequests = []; // host: player ids who pressed T since last frame
   const eraseRequests = []; // host: King Crimson users who pressed T again to cancel
@@ -112,6 +113,9 @@ export function connect(name, onCount) {
     })
     .on('broadcast', { event: 'pickup' }, ({ payload: p }) => {
       if (p?.powerupId && isHost()) pickups.push(p.powerupId);
+    })
+    .on('broadcast', { event: 'boom' }, ({ payload: p }) => {
+      if (typeof p?.x === 'number' && typeof p?.y === 'number') booms.push({ x: p.x, y: p.y });
     })
     .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
       if (p?.from && isHost()) ultRequests.push({ id: p.from, type: p.type });
@@ -215,6 +219,15 @@ export function connect(name, onCount) {
 
     takeEvents() {
       return events.splice(0);
+    },
+
+    takeBooms() {
+      return booms.splice(0);
+    },
+
+    sendBoom(x, y) {
+      if (!synced) return;
+      channel.send({ type: 'broadcast', event: 'boom', payload: { from: id, x, y } });
     },
 
     report(bullet) {

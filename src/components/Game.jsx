@@ -39,7 +39,7 @@ function createAudio() {
   let kingSource = null;
   // Killer Queen's line plays when its buff starts
   const killerGain = ac.createGain();
-  killerGain.gain.value = 1;
+  killerGain.gain.value = 50;
   killerGain.connect(ac.destination);
   let killerBuffer = null;
   let killerSource = null;
@@ -328,8 +328,10 @@ const Game = ({ onClose }) => {
         // shared game (no-ops until the room is joined)
         takeWorld: () => mp?.takeWorld() ?? null,
         takeEvents: () => mp?.takeEvents() ?? [],
+        takeBooms: () => mp?.takeBooms() ?? [],
         takeGameOver: () => mp?.takeGameOver() ?? false,
         report: (b) => mp?.report(b),
+        sendBoom: (x, y) => mp?.sendBoom(x, y),
         reportPickup: (powerupId) => mp?.reportPickup(powerupId),
         startUlt: (st, type) => mp?.startUlt(st, type) ?? false,
         cancelUlt: (st) => mp?.cancelUlt(st) ?? false,
@@ -460,7 +462,7 @@ const Game = ({ onClose }) => {
               >
                 <span className="block text-base font-bold text-fuchsia-200">Killer Queen</span>
                 <span className="mt-2 block text-sm text-white/60">
-                  For 30 seconds your shots blast a wide radius that destroys every enemy bullet it touches.
+                  For 10 seconds your shots blast a wide radius that destroys every enemy bullet it touches.
                 </span>
               </button>
             </div>
