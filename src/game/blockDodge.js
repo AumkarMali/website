@@ -738,6 +738,7 @@ export function step(s, events, io) {
   const killerOn = hasBuff(s.killerBuffs, selfId);
   const d4cOn = hasBuff(s.d4cBuffs, selfId);
   const cMoonOn = hasBuff(s.cMoonBuffs, selfId);
+  const cMoonActive = s.cMoonBuffs.length > 0;
 
   const stopped = s.timeStop > 0;
   const frozen = stopped && !isUlter(s);
@@ -947,10 +948,10 @@ export function step(s, events, io) {
     if (s.x_enemy2 <= 1) { s.gv2x = 0; s.gv2y = 0; }
     if (s.x_enemy21 >= WIDTH - 21) { s.gv21x = 0; s.gv21y = 0; }
     if (s.x_enemy3 <= 1) { s.gv3x = 0; s.gv3y = 0; }
-    [s.x_enemy, s.rand, s.gv1x, s.gv1y] = apply(s.x_enemy, s.rand, s.bulletW, s.bulletH, s.gv1x, s.gv1y);
-    [s.x_enemy2, s.rand2, s.gv2x, s.gv2y] = apply(s.x_enemy2, s.rand2, 20, 15, s.gv2x, s.gv2y);
-    [s.x_enemy21, s.rand21, s.gv21x, s.gv21y] = apply(s.x_enemy21, s.rand21, 20, 15, s.gv21x, s.gv21y);
-    [s.x_enemy3, s.rand3, s.gv3x, s.gv3y] = apply(s.x_enemy3, s.rand3, 20, 7, s.gv3x, s.gv3y);
+    if (s.color !== 'grey12') [s.x_enemy, s.rand, s.gv1x, s.gv1y] = apply(s.x_enemy, s.rand, s.bulletW, s.bulletH, s.gv1x, s.gv1y);
+    if (s.color2 !== 'grey12') [s.x_enemy2, s.rand2, s.gv2x, s.gv2y] = apply(s.x_enemy2, s.rand2, 20, 15, s.gv2x, s.gv2y);
+    if (s.color21 !== 'grey12') [s.x_enemy21, s.rand21, s.gv21x, s.gv21y] = apply(s.x_enemy21, s.rand21, 20, 15, s.gv21x, s.gv21y);
+    if (s.color3 !== 'grey12') [s.x_enemy3, s.rand3, s.gv3x, s.gv3y] = apply(s.x_enemy3, s.rand3, 20, 7, s.gv3x, s.gv3y);
   }
 
   const bullet = drawRect(ctx, s.color, s.x_enemy, s.rand, s.bulletW, s.bulletH);
@@ -1037,13 +1038,15 @@ export function step(s, events, io) {
       if (s.count >= 2) s.score += 1;
     }
   if (collide(bullet, sprite) && s.cont === true) {
-    io.report?.('b1');
-    s.x_enemy = 0;
     if (cMoonOn) {
+      io.report?.('b1');
+      s.x_enemy = 0;
       respawnBullet1(s, io, rng);
       sfx('hit');
       spawnExplosion(s, bullet);
-    } else {
+    } else if (!cMoonActive) {
+      io.report?.('b1');
+      s.x_enemy = 0;
       s.x_change += 40;
       knock(s, max_speed);
       s.lives -= 1;
@@ -1074,13 +1077,16 @@ export function step(s, events, io) {
         s.score += 1;
       }
       if (collide(bullet2, sprite)) {
-        io.report?.('b2');
-        s.x_enemy2 = 0;
-        s.rand2 = rng.randint(30, 540);
         if (cMoonOn) {
+          io.report?.('b2');
+          s.x_enemy2 = 0;
+          s.rand2 = rng.randint(30, 540);
           sfx('hit');
           spawnExplosion(s, bullet2);
-        } else {
+        } else if (!cMoonActive) {
+          io.report?.('b2');
+          s.x_enemy2 = 0;
+          s.rand2 = rng.randint(30, 540);
           s.x_change += 40;
           knock(s, max_speed);
           s.lives -= 1;
@@ -1105,13 +1111,16 @@ export function step(s, events, io) {
         s.score += 1;
       }
       if (collide(bullet21, sprite)) {
-        io.report?.('b21');
-        s.x_enemy21 = 780;
-        s.rand21 = rng.randint(30, 540);
         if (cMoonOn) {
+          io.report?.('b21');
+          s.x_enemy21 = 780;
+          s.rand21 = rng.randint(30, 540);
           sfx('hit');
           spawnExplosion(s, bullet21);
-        } else {
+        } else if (!cMoonActive) {
+          io.report?.('b21');
+          s.x_enemy21 = 780;
+          s.rand21 = rng.randint(30, 540);
           s.x_change -= 40;
           knock(s, max_speed);
           s.lives -= 1;
@@ -1144,13 +1153,16 @@ export function step(s, events, io) {
       }
 
     if (collide(bullet3, sprite)) {
-      io.report?.('b3');
-      s.x_enemy3 = 0;
-      s.rand3 = s.x_warn + 11;
       if (cMoonOn) {
+        io.report?.('b3');
+        s.x_enemy3 = 0;
+        s.rand3 = s.x_warn + 11;
         sfx('hit');
         spawnExplosion(s, bullet3);
-      } else {
+      } else if (!cMoonActive) {
+        io.report?.('b3');
+        s.x_enemy3 = 0;
+        s.rand3 = s.x_warn + 11;
         s.x_change += 40;
         knock(s, max_speed);
         s.lives -= 1;
@@ -1174,13 +1186,16 @@ export function step(s, events, io) {
   if (stopped && s.cont) {
     const stopHit = { b1: false, b2: false, b21: false, b3: false };
     if (collide(bullet, sprite)) {
-      stopHit.b1 = true;
-      io.report?.('b1');
-      s.x_enemy = -60;
       if (cMoonOn) {
+        stopHit.b1 = true;
+        io.report?.('b1');
+        s.x_enemy = -60;
         sfx('hit');
         spawnExplosion(s, bullet);
-      } else {
+      } else if (!cMoonActive) {
+        stopHit.b1 = true;
+        io.report?.('b1');
+        s.x_enemy = -60;
         s.x_change += 40;
         knock(s, max_speed);
         s.lives -= 1;
@@ -1190,13 +1205,16 @@ export function step(s, events, io) {
     }
     if (levels >= 30) {
       if (collide(bullet2, sprite)) {
-        stopHit.b2 = true;
-        io.report?.('b2');
-        s.x_enemy2 = -60;
         if (cMoonOn) {
+          stopHit.b2 = true;
+          io.report?.('b2');
+          s.x_enemy2 = -60;
           sfx('hit');
           spawnExplosion(s, bullet2);
-        } else {
+        } else if (!cMoonActive) {
+          stopHit.b2 = true;
+          io.report?.('b2');
+          s.x_enemy2 = -60;
           s.x_change += 40;
           knock(s, max_speed);
           s.lives -= 1;
@@ -1205,13 +1223,16 @@ export function step(s, events, io) {
         }
       }
       if (collide(bullet21, sprite)) {
-        stopHit.b21 = true;
-        io.report?.('b21');
-        s.x_enemy21 = 860;
         if (cMoonOn) {
+          stopHit.b21 = true;
+          io.report?.('b21');
+          s.x_enemy21 = 860;
           sfx('hit');
           spawnExplosion(s, bullet21);
-        } else {
+        } else if (!cMoonActive) {
+          stopHit.b21 = true;
+          io.report?.('b21');
+          s.x_enemy21 = 860;
           s.x_change -= 40;
           knock(s, max_speed);
           s.lives -= 1;
@@ -1221,13 +1242,16 @@ export function step(s, events, io) {
       }
     }
     if (levels >= 59 && collide(bullet3, sprite)) {
-      stopHit.b3 = true;
-      io.report?.('b3');
-      s.x_enemy3 = -60;
       if (cMoonOn) {
+        stopHit.b3 = true;
+        io.report?.('b3');
+        s.x_enemy3 = -60;
         sfx('hit');
         spawnExplosion(s, bullet3);
-      } else {
+      } else if (!cMoonActive) {
+        stopHit.b3 = true;
+        io.report?.('b3');
+        s.x_enemy3 = -60;
         s.x_change += 40;
         knock(s, max_speed);
         s.lives -= 1;
