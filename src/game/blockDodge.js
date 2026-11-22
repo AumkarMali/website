@@ -371,9 +371,6 @@ export function drawUltOverlay(ctx, s) {
       ctx.fillStyle = `rgba(255, 255, 255, ${0.3 * (1 - t / 12)})`;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
     }
-    if (t < ULT_WINDUP_FRAMES) {
-      text(ctx, 'bold 60px "Times New Roman", Times, serif', 'THE WORLD', [250, 204, 21], cx, 150);
-    }
   }
   ctx.restore();
 }
