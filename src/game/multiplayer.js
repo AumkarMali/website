@@ -6,13 +6,13 @@
 // host, who resets that bullet for everyone. Each player also broadcasts its block and its
 // own shots, drawn translucent on everyone else's screen. Lives and score are per player.
 // Power-up icons are shared: any multiple of 50 points (from any player) drops one on the
-// map, and whoever touches it first gets the boost. The ultimate (T) freezes the shared world
-// for 5 s while the player who used it keeps moving; the host owns that clock too. When any
-// player dies, the game ends for everyone in it.
+// map, and whoever touches it first gets the boost. The ultimate (T) runs a 2 s windup and
+// then freezes the shared world for 10 s while the player who used it keeps moving; the host
+// owns that clock too. When any player dies, the game ends for everyone in it.
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_FRAMES } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, ULT_MIN_TIMER } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -137,8 +137,8 @@ export function connect(name, onCount) {
       }
       if (ultRequests.length && isHost()) {
         for (const uid of ultRequests.splice(0)) {
-          if (s.timeStop > 0) break;
-          s.timeStop = ULT_FRAMES;
+          if (s.timeStop > 0 || s.ultWindup > 0 || s.timer < ULT_MIN_TIMER) break;
+          s.ultWindup = ULT_WINDUP_FRAMES;
           s.timeStopBy = uid;
         }
       }
@@ -209,8 +209,8 @@ export function connect(name, onCount) {
 
     startUlt(s) {
       if (isHost()) {
-        if (s.timeStop > 0) return true;
-        s.timeStop = ULT_FRAMES;
+        if (s.timeStop > 0 || s.ultWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
+        s.ultWindup = ULT_WINDUP_FRAMES;
         s.timeStopBy = id;
         return true;
       }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, RotateCcw, Users, X } from 'lucide-react';
-import { createState, step, FPS, WIDTH, HEIGHT } from '../game/blockDodge';
+import { createState, step, FPS, WIDTH, HEIGHT, drawUltOverlay } from '../game/blockDodge';
 // Supabase is only downloaded when the game opens, and only if it's configured.
 const MULTIPLAYER = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
 
@@ -24,6 +24,12 @@ function createAudio() {
   const musicGain = ac.createGain();
   musicGain.gain.value = 0;
   musicGain.connect(ac.destination);
+  // the ultimate clip runs through its own gain: triple the original volume
+  const ultGain = ac.createGain();
+  ultGain.gain.value = 3;
+  ultGain.connect(ac.destination);
+  let ultBuffer = null;
+  let ultSource = null;
   let musicSource = null;
   let musicStartedAt = null; // ac time of the last mixer.music.play()
   let musicPausedAt = null; // seconds into the track when paused (time stop)
@@ -50,6 +56,11 @@ function createAudio() {
   };
 
   const ready = Promise.all(SOUNDS.map(load));
+  fetch('/game/timestop.m4a')
+    .then((r) => r.arrayBuffer())
+    .then((b) => ac.decodeAudioData(b))
+    .then((buf) => { ultBuffer = buf; })
+    .catch(() => {});
   // The music file is large; if it decodes late, join at the right position.
   load('music').then(() => {
     if (musicStartedAt !== null && buffers.music) startMusic(Math.max(0, ac.currentTime - musicStartedAt));
@@ -59,6 +70,16 @@ function createAudio() {
     ready,
     resume: () => ac.resume().catch(() => {}),
     sfx(name) {
+      if (name === 'ult') {
+        if (!ultBuffer) return;
+        const src = ac.createBufferSource();
+        src.buffer = ultBuffer;
+        src.connect(ultGain);
+        src.onended = () => { if (ultSource === src) ultSource = null; };
+        ultSource = src;
+        src.start();
+        return;
+      }
       const buf = buffers[name];
       if (name === 'fire') {
         if (!buf) return;
@@ -113,6 +134,8 @@ function createAudio() {
     close() {
       musicStartedAt = null;
       stopMusic();
+      try { ultSource?.stop(); } catch { /* ended */ }
+      ultSource = null;
       active.forEach((s) => { try { s.stop(); } catch { /* ended */ } });
       ac.close().catch(() => {});
     },
@@ -142,7 +165,6 @@ const PadButton = ({ k, onPress, onRelease, children, className = '' }) => (
 
 const Game = ({ onClose }) => {
   const canvasRef = useRef(null);
-  const videoRef = useRef(null);
   const queue = useRef([]);
   const held = useRef(new Set());
   const [run, setRun] = useState(0); // bump to restart, like relaunching the program
@@ -219,23 +241,6 @@ const Game = ({ onClose }) => {
     queue.current = [];
     held.current.clear();
     let mp = null; // multiplayer room, joined once the game starts
-    const video = videoRef.current;
-    let videoOn = false;
-    // the time-stop clip lives above the canvas: play it for the whole stop, with its audio
-    const setVideo = (on) => {
-      if (!video || videoOn === on) return;
-      videoOn = on;
-      if (on) {
-        try { video.currentTime = 0; } catch { /* not seekable yet */ }
-        video.style.opacity = '0.75'; // keep the frozen game visible under the effect
-        video.play().catch(() => {}); // blocked autoplay: the visual simply stays hidden
-      } else {
-        video.pause();
-        try { video.currentTime = 0; } catch { /* not seekable yet */ }
-        video.style.opacity = '0';
-      }
-    };
-    if (video) video.style.opacity = '0';
 
     (async () => {
       const [heart, bullet] = await Promise.all([loadImage('/game/heart.png'), loadImage('/game/bullet.png')]);
@@ -280,11 +285,11 @@ const Game = ({ onClose }) => {
           queue.current = [];
           const shown = step(state, events, io);
           if (state.exited) { onCloseRef.current(); return; } // sys.exit() closes the window
-          setVideo(state.timeStop > 0);
           if (shown) {
             screen.drawImage(off, 0, 0); // pygame.display.update()
             mp?.tick(state);
             mp?.draw(screen, { bullet }, state); // other players and their shots, on top of your frame
+            drawUltOverlay(screen, state); // time-stop tint and ripples over everything
           }
           acc -= frame;
           steps += 1;
@@ -298,7 +303,6 @@ const Game = ({ onClose }) => {
     return () => {
       cancelled = true;
       mp?.close();
-      video?.pause();
       setPlayers(1);
       cancelAnimationFrame(raf);
       audio.close();
@@ -349,17 +353,7 @@ const Game = ({ onClose }) => {
             </button>
           </div>
         </div>
-        <div className="relative">
-          <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="block aspect-[4/3] w-full bg-[#1f1f1f]" />
-          <video
-            ref={videoRef}
-            src="/game/timestop.mp4"
-            playsInline
-            preload="auto"
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-200"
-          />
-        </div>
+        <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="block aspect-[4/3] w-full bg-[#1f1f1f]" />
       </motion.div>
 
       {touch ? (

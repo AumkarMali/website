@@ -8,8 +8,8 @@
 // whenever any arrow is released; here each axis follows the arrows still held (the most
 // recently pressed one wins), so releasing one arrow never stops another that is held.
 // Sniper bullets move 30% slower (SNIPER_SPEED).
-// T is the ultimate: time stops for 5 s, everything freezes except the player who used it,
-// who can still move, shoot and take power-ups.
+// T is the ultimate: a 2 s windup, then time stops for 10 s. Everything freezes except the
+// player who used it, who can still move, shoot and take power-ups.
 //
 // pygame behaviour reproduced here:
 // - pygame.draw.rect truncates float coordinates to int and returns the rect
@@ -34,11 +34,13 @@ const BOOST_FRAMES = 10 * 60;
 const BOOST = 2;
 const POWERUP_TYPES = ['speed', 'fire', 'life'];
 const MAX_LIVES = 3;
-// Ultimate, "the world": time stops for 5 s. Enemy bullets, the level clock, power-up timers
-// and every other player freeze; the player who used it can still move, shoot and pick up
-// icons. 30 s cooldown. Press T. A 2 s "THE WORLD" banner opens the stop.
-export const ULT_FRAMES = 5 * 60;
-const ULT_BANNER_FRAMES = 2 * 60;
+// Ultimate, "the world": pressing T starts the clip and a 2 s windup while the game still
+// runs; after that time stops for 10 s. Enemy bullets, the level clock, power-up timers and
+// every other player freeze; the player who used it can still move, shoot and pick up icons.
+// 30 s cooldown, and it can't be used in the first 10 s of the game.
+export const ULT_FRAMES = 10 * 60;
+export const ULT_WINDUP_FRAMES = 2 * 60;
+export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const ULT_COOLDOWN = 30 * 60;
 // After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
 // can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
@@ -138,7 +140,9 @@ export function createState() {
     powerups: [], // { id, x, y, ttl, type } icons lying on the map
     timeStop: 0, // frames of stopped time left (ultimate)
     timeStopBy: null, // id of the player who stopped time; null = local player
-    timeStopPrev: 0, // last frame's timeStop, so the ultimate sound plays once
+    ultWindup: 0, // frames of windup left before time actually stops
+    ultAnim: 0, // frames since the ultimate started, for the ripple animation
+    ultActivePrev: false, // last frame's ult state, so the clip/BGM trigger once
     ultCooldown: 0, // frames until the ultimate can be used again
     speedBoost: 0, // frames of 2x speed left
     fireBoost: 0, // frames of 2x fire rate left
@@ -168,7 +172,7 @@ export const WORLD_KEYS = [
   'x_enemy2', 'rand2', 'x_enemy21', 'rand21', 'color2', 'color21', 'enemy_accel2',
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
-  'timeStop', 'timeStopBy',
+  'timeStop', 'timeStopBy', 'ultWindup',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -265,10 +269,12 @@ export function spawnPowerup(s, rng = Math.random) {
 
 // Ultimate: freeze time for everyone but the player who pressed T.
 function tryUlt(s, io, frozen) {
-  if (frozen || !s.cont || s.timeStop > 0 || s.ultCooldown > 0) return;
+  if (frozen || !s.cont || s.ultCooldown > 0) return;
+  if (s.timeStop > 0 || s.ultWindup > 0) return;
+  if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
   s.ultCooldown = ULT_COOLDOWN;
   if (io.startUlt?.(s)) return; // host took over, or a guest asked the host
-  s.timeStop = ULT_FRAMES;
+  s.ultWindup = ULT_WINDUP_FRAMES;
   s.timeStopBy = io.selfId?.() ?? null;
 }
 
@@ -327,6 +333,39 @@ function blit(ctx, img, x, y) {
   if (ctx && img) ctx.drawImage(img, Math.trunc(x), Math.trunc(y));
 }
 
+// Full-screen colour wash + expanding ripple for the ultimate. Drawn on the visible canvas
+// after the ghost players, so it tints everything and every client sees the same effect.
+export function drawUltOverlay(ctx, s) {
+  const active = s.timeStop > 0 || s.ultWindup > 0;
+  if (!ctx || !active || s.ultAnim <= 0) return;
+  const t = s.ultAnim;
+  const cx = WIDTH / 2;
+  const cy = HEIGHT / 2;
+  // time slowly drains the colour while the stop lasts
+  const wash = s.timeStop > 0 ? 0.22 : 0.08 + 0.12 * Math.min(1, t / ULT_WINDUP_FRAMES);
+  ctx.save();
+  ctx.fillStyle = `rgba(90, 56, 200, ${wash})`;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  const LIFE = 96; // frames for one ripple to cross the screen
+  for (let i = 0; i < 4; i += 1) {
+    const phase = ((t + (i * LIFE) / 4) % LIFE) / LIFE;
+    const radius = phase * 760;
+    ctx.strokeStyle = `rgba(205, 196, 255, ${(1 - phase) * 0.4})`;
+    ctx.lineWidth = 2 + 3 * (1 - phase);
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  if (t < 12) { // opening flash
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.3 * (1 - t / 12)})`;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  }
+  if (t < ULT_WINDUP_FRAMES) {
+    text(ctx, 'bold 60px "Times New Roman", Times, serif', 'THE WORLD', [250, 204, 21], cx, 150);
+  }
+  ctx.restore();
+}
+
 /**
  * One frame.
  * @param s       state from createState()
@@ -371,12 +410,31 @@ export function step(s, events, io) {
     }
   }
 
+  // Host runs the ultimate clock: 2 s of windup (the game keeps playing), then the 10 s
+  // stop. Guests adopt both values from the world broadcast.
+  if (io.ownsWorld ? io.ownsWorld() : true) {
+    if (s.ultWindup > 0) {
+      s.ultWindup -= 1;
+      if (s.ultWindup === 0) s.timeStop = ULT_FRAMES;
+    } else if (s.timeStop > 0) {
+      s.timeStop -= 1;
+      if (s.timeStop === 0) s.timeStopBy = null;
+    }
+  }
+
   const stopped = s.timeStop > 0;
   const frozen = stopped && !isUlter(s);
-  // the BGM stops for the whole time stop and picks up where it left off
-  if (stopped && s.timeStopPrev === 0) music.pause?.();
-  else if (!stopped && s.timeStopPrev > 0) music.resume?.();
-  s.timeStopPrev = s.timeStop;
+  const ultActive = stopped || s.ultWindup > 0;
+  // the clip starts with the windup; the BGM stays off through the whole effect
+  if (ultActive && !s.ultActivePrev) {
+    sfx('ult');
+    music.pause?.();
+  } else if (!ultActive && s.ultActivePrev) {
+    music.resume?.();
+  }
+  s.ultActivePrev = ultActive;
+  if (ultActive) s.ultAnim += 1;
+  else s.ultAnim = 0;
 
   if (s.fHeld && !s.firedThisFrame && !frozen) {
     s.fireTimer -= s.fireBoost > 0 ? BOOST : 1;
@@ -649,6 +707,40 @@ export function step(s, events, io) {
     }
   }
 
+  // During the stop the world is frozen, but the player who used the ultimate can still shoot
+  // the frozen bullets: only the shot-hit branches run, movement and damage stay paused.
+  if (stopped && !frozen && s.cont) {
+    if (shotHits(bullet)) {
+      io.report?.('b1');
+      respawnBullet1(s, io, rng);
+      sfx('hit');
+      s.x_enemy = 0;
+      s.score += 2;
+    }
+    if (levels >= 30) {
+      if (shotHits(bullet2)) {
+        io.report?.('b2');
+        s.x_enemy2 = 0;
+        s.x_change += 20;
+        knock(s, RECOIL_CAP);
+        s.rand2 = rng.randint(30, 540);
+        sfx('hit');
+      }
+      if (shotHits(bullet21)) {
+        io.report?.('b21');
+        s.x_enemy21 = 780;
+        s.rand21 = rng.randint(30, 540);
+        sfx('hit');
+      }
+    }
+    if (levels >= 59 && shotHits(bullet3)) {
+      io.report?.('b3');
+      s.rand3 = s.x_warn + 11;
+      s.x_enemy3 = 0;
+      sfx('hit');
+    }
+  }
+
   // every multiple of 50 points adds an icon to the shared map; only the host (or a single
   // player) creates them, but every player tracks the level so joining the host role later
   // doesn't drop a backlog of icons
@@ -669,25 +761,16 @@ export function step(s, events, io) {
     if (s.fireBoost > 0) {
       text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
     }
-    const ultColor = s.timeStop > 0 ? [216, 180, 254] : s.ultCooldown > 0 ? [130, 130, 130] : [250, 204, 21];
+    const ultLocked = s.timer < ULT_MIN_TIMER;
+    const ultColor = s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
     const ultLabel = s.timeStop > 0
       ? `TIME STOP  ${(s.timeStop / 60).toFixed(1)}s`
-      : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s` : 'ULT READY  [T]';
+      : s.ultWindup > 0
+        ? `TIME STOP IN  ${(s.ultWindup / 60).toFixed(1)}s`
+        : ultLocked
+          ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
+          : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s` : 'ULT READY  [T]';
     text(ctx, 'bold 18px Arial, sans-serif', ultLabel, ultColor, 680, 580);
-  }
-
-  if (ctx && stopped) {
-    ctx.fillStyle = 'rgba(88, 52, 160, 0.18)';
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
-    if (s.timeStop > ULT_FRAMES - ULT_BANNER_FRAMES) {
-      text(ctx, 'bold 64px "Times New Roman", Times, serif', 'THE WORLD', [250, 204, 21], 400, 150);
-    }
-  }
-
-  // the host runs the stopped-time clock; guests adopt it from the world broadcast
-  if (stopped && (io.ownsWorld ? io.ownsWorld() : true)) {
-    s.timeStop -= 1;
-    if (s.timeStop === 0) s.timeStopBy = null;
   }
 
   s.death = Math.trunc(pyRound(s.lives));
