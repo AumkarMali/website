@@ -331,7 +331,7 @@ const Game = ({ onClose }) => {
         takeBooms: () => mp?.takeBooms() ?? [],
         takeGameOver: () => mp?.takeGameOver() ?? false,
         report: (b) => mp?.report(b),
-        sendBoom: (x, y) => mp?.sendBoom(x, y),
+        sendBoom: (x, y, big) => mp?.sendBoom(x, y, big),
         reportPickup: (powerupId) => mp?.reportPickup(powerupId),
         startUlt: (st, type) => mp?.startUlt(st, type) ?? false,
         cancelUlt: (st) => mp?.cancelUlt(st) ?? false,

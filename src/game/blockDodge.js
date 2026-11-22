@@ -566,9 +566,17 @@ export function step(s, events, io) {
     s.remoteKO = true;
   }
   for (const bullet of io.takeEvents?.() ?? []) applyRemoteHit(s, bullet, io);
-  // other players' Killer Queen blasts
+  // other players' shot bursts (small, or Killer Queen's big blast)
   for (const b of io.takeBooms?.() ?? []) {
-    s.explosions.push({ x: b.x, y: b.y, ttl: BIG_EXPLOSION_FRAMES, max: BIG_EXPLOSION_FRAMES, size: KILLER_RADIUS });
+    const big = !!b.big;
+    const frames = big ? BIG_EXPLOSION_FRAMES : EXPLOSION_FRAMES;
+    s.explosions.push({
+      x: b.x,
+      y: b.y,
+      ttl: frames,
+      max: frames,
+      size: big ? KILLER_RADIUS : 25,
+    });
   }
   const sfx = io.sfx || (() => {});
   const music = io.music || { play() {}, stop() {}, volume() {} };
@@ -809,14 +817,12 @@ export function step(s, events, io) {
 
   // Killer Queen: each shot hit blasts a wide radius and wipes nearby enemy bullets too.
   const shotExplosion = (rect, type) => {
-    if (!(s.killer > 0 && isKillerUlter(s))) {
-      spawnExplosion(s, rect);
-      return;
-    }
-    spawnExplosion(s, rect, true);
+    const big = s.killer > 0 && isKillerUlter(s);
+    spawnExplosion(s, rect, big);
     const cx = rect.x + rect.w / 2;
     const cy = rect.y + rect.h / 2;
-    io.sendBoom?.(cx, cy); // let the other players see the blast too
+    io.sendBoom?.(cx, cy, big); // every player sees every hit burst
+    if (!big) return;
     const targets = [['b1', bullet]];
     if (levels >= 30) targets.push(['b2', bullet2], ['b21', bullet21]);
     if (levels >= 59) targets.push(['b3', bullet3]);

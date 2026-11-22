@@ -115,7 +115,7 @@ export function connect(name, onCount) {
       if (p?.powerupId && isHost()) pickups.push(p.powerupId);
     })
     .on('broadcast', { event: 'boom' }, ({ payload: p }) => {
-      if (typeof p?.x === 'number' && typeof p?.y === 'number') booms.push({ x: p.x, y: p.y });
+      if (typeof p?.x === 'number' && typeof p?.y === 'number') booms.push({ x: p.x, y: p.y, big: !!p.big });
     })
     .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
       if (p?.from && isHost()) ultRequests.push({ id: p.from, type: p.type });
@@ -225,9 +225,9 @@ export function connect(name, onCount) {
       return booms.splice(0);
     },
 
-    sendBoom(x, y) {
+    sendBoom(x, y, big) {
       if (!synced) return;
-      channel.send({ type: 'broadcast', event: 'boom', payload: { from: id, x, y } });
+      channel.send({ type: 'broadcast', event: 'boom', payload: { from: id, x, y, big: !!big } });
     },
 
     report(bullet) {
