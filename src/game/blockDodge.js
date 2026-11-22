@@ -128,6 +128,56 @@ export function createState() {
   };
 }
 
+// ---- Shared game (multiplayer) ----
+// Everything about the enemy bullets and the level clock; lives, score and the player's
+// own block stay per player.
+export const WORLD_KEYS = [
+  'x_enemy', 'rand', 'color', 'enemy_accel', 'bulletW', 'bulletH',
+  'x_enemy2', 'rand2', 'x_enemy21', 'rand21', 'color2', 'color21', 'enemy_accel2',
+  'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
+  'timer', 'count', 'count_init', 'intro_timer', 'bullet_types',
+];
+// Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
+export const BULLET_KEYS = {
+  b1: ['x_enemy', 'rand'],
+  b2: ['x_enemy2', 'rand2'],
+  b21: ['x_enemy21', 'rand21'],
+  b3: ['x_enemy3', 'rand3'],
+};
+export const getWorld = (s) => Object.fromEntries(WORLD_KEYS.map((k) => [k, s[k]]));
+export function applyWorld(s, w) {
+  for (const k of WORLD_KEYS) if (k in w) s[k] = w[k];
+}
+
+// Where a new bullet aims: a random living player in multiplayer, otherwise you.
+const aimY = (s, io) => (io.targetY ? io.targetY(s) : s.y);
+
+function respawnBullet1(s, io, rng) {
+  const ty = aimY(s, io);
+  const gen = rng.randrange(-50, 50);
+  s.rand = ty + gen;
+  if (ty >= 520) s.rand -= 30;
+  if (ty <= 60) s.rand += 30;
+}
+
+// Host side: another player was hit by, or shot down, this bullet. Reset it for everyone.
+export function applyRemoteHit(s, bullet, io) {
+  const rng = io.rng || mathRandomRng;
+  if (bullet === 'b1') {
+    s.x_enemy = 0;
+    respawnBullet1(s, io, rng);
+  } else if (bullet === 'b2') {
+    s.x_enemy2 = 0;
+    s.rand2 = rng.randint(30, 540);
+  } else if (bullet === 'b21') {
+    s.x_enemy21 = 780;
+    s.rand21 = rng.randint(30, 540);
+  } else if (bullet === 'b3') {
+    s.rand3 = s.x_warn + 11;
+    s.x_enemy3 = 0;
+  }
+}
+
 // One bullet from the next barrel (the y offsets are the original const1/const2).
 function fire(s, sfx) {
   sfx('fire');
@@ -184,6 +234,11 @@ function blit(ctx, img, x, y) {
  */
 export function step(s, events, io) {
   const { ctx = null, images = {}, rng = mathRandomRng } = io;
+  // Shared game: guests adopt the host's bullets and level; the host applies other
+  // players' hits. Both hooks are absent in single-player.
+  const world = io.takeWorld?.();
+  if (world) applyWorld(s, world);
+  for (const bullet of io.takeEvents?.() ?? []) applyRemoteHit(s, bullet, io);
   const sfx = io.sfx || (() => {});
   const music = io.music || { play() {}, stop() {}, volume() {} };
 
@@ -337,14 +392,12 @@ export function step(s, events, io) {
     s.bulletW = 40;
     s.bulletH = 20;
 
-    const gen = rng.randrange(-50, 50);
-    s.rand = s.y + gen;
-    if (s.y >= 520) s.rand -= 30;
-    if (s.y <= 60) s.rand += 30;
+    respawnBullet1(s, io, rng);
 
     if (s.count >= 2) s.score += 1;
   }
   if (collide(bullet, sprite) && s.cont === true) {
+    io.report?.('b1');
     s.x_enemy = 0;
     s.x_change += 40;
     s.lives -= 1;
@@ -353,10 +406,8 @@ export function step(s, events, io) {
     s.hits = true;
   }
   if (s.cont === true && shotHits(bullet)) {
-    const gen = rng.randrange(-50, 50);
-    s.rand = s.y + gen;
-    if (s.y >= 520) s.rand -= 30;
-    if (s.y <= 60) s.rand += 30;
+    io.report?.('b1');
+    respawnBullet1(s, io, rng);
     sfx('hit');
     s.x_enemy = 0;
     s.score += 2;
@@ -375,6 +426,7 @@ export function step(s, events, io) {
       s.score += 1;
     }
     if (collide(bullet2, sprite)) {
+      io.report?.('b2');
       s.x_enemy2 = 0;
       s.x_change += 40;
       s.lives -= 1;
@@ -383,6 +435,7 @@ export function step(s, events, io) {
       s.hits = true;
     }
     if (shotHits(bullet2)) {
+      io.report?.('b2');
       s.x_enemy2 = 0;
       s.x_change += 40;
       s.rand2 = rng.randint(30, 540);
@@ -396,6 +449,7 @@ export function step(s, events, io) {
       s.score += 1;
     }
     if (collide(bullet21, sprite)) {
+      io.report?.('b21');
       s.x_enemy21 = 780;
       s.x_change -= 40;
       s.lives -= 1;
@@ -404,6 +458,7 @@ export function step(s, events, io) {
       s.hits = true;
     }
     if (shotHits(bullet21)) {
+      io.report?.('b21');
       s.x_enemy21 = 780;
       s.rand21 = rng.randint(30, 540);
       sfx('hit');
@@ -418,7 +473,7 @@ export function step(s, events, io) {
 
     if (collide(bullet3, wall2)) {
       s.x_enemy3 = 0;
-      s.x_warn = s.y;
+      s.x_warn = aimY(s, io);
       s.rand3 = s.x_warn + 11;
       s.color3 = 'red';
       s.color4 = 'red';
@@ -426,6 +481,7 @@ export function step(s, events, io) {
     }
 
     if (collide(bullet3, sprite)) {
+      io.report?.('b3');
       s.x_change += 40;
       s.lives -= 1;
       s.rand3 = s.x_warn + 11;
@@ -434,6 +490,7 @@ export function step(s, events, io) {
       s.hits = true;
     }
     if (shotHits(bullet3)) {
+      io.report?.('b3');
       s.rand3 = s.x_warn + 11;
       s.x_enemy3 = 0;
       sfx('hit');

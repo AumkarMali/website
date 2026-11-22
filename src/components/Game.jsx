@@ -208,7 +208,17 @@ const Game = ({ onClose }) => {
       await audio.resume();
       await audio.ready;
       if (cancelled) return;
-      const io = { ctx: offCtx, images: { heart, bullet }, sfx: (n) => audio.sfx(n), music: audio.music };
+      const io = {
+        ctx: offCtx,
+        images: { heart, bullet },
+        sfx: (n) => audio.sfx(n),
+        music: audio.music,
+        // shared game (no-ops until the room is joined)
+        takeWorld: () => mp?.takeWorld() ?? null,
+        takeEvents: () => mp?.takeEvents() ?? [],
+        report: (b) => mp?.report(b),
+        targetY: (st) => (mp ? mp.targetY(st) : st.y),
+      };
       if (MULTIPLAYER) {
         import('../game/multiplayer')
           .then(({ connect }) => {
@@ -232,8 +242,8 @@ const Game = ({ onClose }) => {
           if (state.exited) { onCloseRef.current(); return; } // sys.exit() closes the window
           if (shown) {
             screen.drawImage(off, 0, 0); // pygame.display.update()
-            mp?.send(state);
-            mp?.draw(screen); // other players, on top of your frame
+            mp?.tick(state);
+            mp?.draw(screen, { bullet }); // other players and their shots, on top of your frame
           }
           acc -= frame;
           steps += 1;
@@ -284,7 +294,7 @@ const Game = ({ onClose }) => {
                 className="w-28 rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs outline-none focus:border-orange-500"
               />
               <span className="flex items-center gap-1 text-xs text-neutral-600" title="Players in the game right now">
-                <Users size={13} /> {players} playing
+                <Users size={13} /> {players} playing{players > 1 ? ' · same game' : ''}
               </span>
             </div>
           )}
