@@ -8,6 +8,8 @@
 // whenever any arrow is released; here each axis follows the arrows still held (the most
 // recently pressed one wins), so releasing one arrow never stops another that is held.
 // Sniper bullets move 30% slower (SNIPER_SPEED).
+// T is the ultimate: time stops for 5 s, everything freezes except the player who used it,
+// who can still move, shoot and take power-ups.
 //
 // pygame behaviour reproduced here:
 // - pygame.draw.rect truncates float coordinates to int and returns the rect
@@ -32,6 +34,12 @@ const BOOST_FRAMES = 10 * 60;
 const BOOST = 2;
 const POWERUP_TYPES = ['speed', 'fire', 'life'];
 const MAX_LIVES = 3;
+// Ultimate, "the world": time stops for 5 s. Enemy bullets, the level clock, power-up timers
+// and every other player freeze; the player who used it can still move, shoot and pick up
+// icons. 30 s cooldown. Press T. A 2 s "THE WORLD" banner opens the stop.
+export const ULT_FRAMES = 5 * 60;
+const ULT_BANNER_FRAMES = 2 * 60;
+const ULT_COOLDOWN = 30 * 60;
 // After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
 // can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
 const KNOCK_FRAMES = 15;
@@ -128,6 +136,10 @@ export function createState() {
     fireTimer: 0, // frames until the next held-F shot
     powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
     powerups: [], // { id, x, y, ttl, type } icons lying on the map
+    timeStop: 0, // frames of stopped time left (ultimate)
+    timeStopBy: null, // id of the player who stopped time; null = local player
+    timeStopPrev: 0, // last frame's timeStop, so the ultimate sound plays once
+    ultCooldown: 0, // frames until the ultimate can be used again
     speedBoost: 0, // frames of 2x speed left
     fireBoost: 0, // frames of 2x fire rate left
     knock: 0, // frames of knockback speed limit left
@@ -156,6 +168,7 @@ export const WORLD_KEYS = [
   'x_enemy2', 'rand2', 'x_enemy21', 'rand21', 'color2', 'color21', 'enemy_accel2',
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
+  'timeStop', 'timeStopBy',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -250,6 +263,15 @@ export function spawnPowerup(s, rng = Math.random) {
   });
 }
 
+// Ultimate: freeze time for everyone but the player who pressed T.
+function tryUlt(s, io, frozen) {
+  if (frozen || !s.cont || s.timeStop > 0 || s.ultCooldown > 0) return;
+  s.ultCooldown = ULT_COOLDOWN;
+  if (io.startUlt?.(s)) return; // host took over, or a guest asked the host
+  s.timeStop = ULT_FRAMES;
+  s.timeStopBy = io.selfId?.() ?? null;
+}
+
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
 function knock(s, cap) {
   s.knock = KNOCK_FRAMES;
@@ -308,8 +330,9 @@ function blit(ctx, img, x, y) {
 /**
  * One frame.
  * @param s       state from createState()
- * @param events  [{type: 'keydown'|'keyup', key: 'left'|'right'|'up'|'down'|'f'}] for this frame
- * @param io      { ctx?, images?: {heart, bullet}, rng, sfx?(name), music?: {play(), stop(), volume(v)} }
+ * @param events  [{type: 'keydown'|'keyup', key: 'left'|'right'|'up'|'down'|'f'|'t'}] for this frame
+ * @param io      { ctx?, images?: {heart, bullet}, rng, sfx?(name), music?: {play(), stop(), volume(v)},
+ *                  isUlter?(s), startUlt?(s), selfId?(), ownsWorld?() }
  */
 export function step(s, events, io) {
   const { ctx = null, images = {}, rng = mathRandomRng } = io;
@@ -321,6 +344,8 @@ export function step(s, events, io) {
   for (const bullet of io.takeEvents?.() ?? []) applyRemoteHit(s, bullet, io);
   const sfx = io.sfx || (() => {});
   const music = io.music || { play() {}, stop() {}, volume() {} };
+  const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
+  const frozenNow = s.timeStop > 0 && !isUlter(s);
 
   for (const event of events) {
     if (event.type === 'keydown') {
@@ -330,9 +355,10 @@ export function step(s, events, io) {
       if (event.key === 'up') s.accel_y = -0.2;
       if (event.key === 'down') s.accel_y = 0.2;
 
+      if (event.key === 't') tryUlt(s, io, frozenNow);
       if (event.key === 'f') {
         s.fHeld = true;
-        fire(s, sfx);
+        if (!frozenNow) fire(s, sfx);
       }
     } else if (event.type === 'keyup') {
       if (event.key in s.arrows) {
@@ -345,7 +371,14 @@ export function step(s, events, io) {
     }
   }
 
-  if (s.fHeld && !s.firedThisFrame) {
+  const stopped = s.timeStop > 0;
+  const frozen = stopped && !isUlter(s);
+  // the BGM stops for the whole time stop and picks up where it left off
+  if (stopped && s.timeStopPrev === 0) music.pause?.();
+  else if (!stopped && s.timeStopPrev > 0) music.resume?.();
+  s.timeStopPrev = s.timeStop;
+
+  if (s.fHeld && !s.firedThisFrame && !frozen) {
     s.fireTimer -= s.fireBoost > 0 ? BOOST : 1;
     if (s.fireTimer <= 0) {
       const carry = s.fireTimer; // keep the leftover so boosted gaps average 4.5 frames (exactly 2x)
@@ -354,7 +387,7 @@ export function step(s, events, io) {
     }
   }
   s.firedThisFrame = false;
-  for (const shot of s.shots) shot.x -= 13;
+  if (!frozen) for (const shot of s.shots) shot.x -= 13;
   s.shots = s.shots.filter((shot) => shot.x > -60);
   s.new_x = s.x + 10;
   s.new_y = s.y + 50;
@@ -363,7 +396,8 @@ export function step(s, events, io) {
 
   music.volume(s.fade_in);
   s.fade_in += 0.0017;
-  s.timer += 0.02;
+  if (!stopped) s.timer += 0.02;
+  if (!stopped && s.ultCooldown > 0) s.ultCooldown -= 1;
   const levels = pyRound(s.timer);
 
   const x_round = pyRound(s.x_change);
@@ -387,28 +421,32 @@ export function step(s, events, io) {
     }
   }
 
-  if (levels <= 4) music.play();
+  if (!stopped && levels <= 4) music.play();
 
-  const speed = s.speedBoost > 0 ? BOOST : 1;
-  if (s.speedBoost > 0) s.speedBoost -= 1;
-  if (s.fireBoost > 0) s.fireBoost -= 1;
-  const cap = s.knock > 0 ? s.knockCap : max_speed * speed;
-  if (s.knock > 0) s.knock -= 1;
-  s.x_change += s.accel_x * speed;
-  s.y_change += s.accel_y * speed;
+  if (!frozen) {
+    const speed = s.speedBoost > 0 ? BOOST : 1;
+    if (s.speedBoost > 0) s.speedBoost -= 1;
+    if (s.fireBoost > 0) s.fireBoost -= 1;
+    const cap = s.knock > 0 ? s.knockCap : max_speed * speed;
+    if (s.knock > 0) s.knock -= 1;
+    s.x_change += s.accel_x * speed;
+    s.y_change += s.accel_y * speed;
 
-  if (Math.abs(s.x_change) >= cap) s.x_change = (s.x_change / Math.abs(s.x_change)) * cap;
-  if (Math.abs(s.y_change) >= cap) s.y_change = (s.y_change / Math.abs(s.y_change)) * cap;
-  if (s.enemy_accel >= 14) s.enemy_accel = (s.enemy_accel / s.enemy_accel) * 14;
-  if (s.enemy_accel2 >= 12) s.enemy_accel2 = (s.enemy_accel2 / s.enemy_accel2) * 12;
-  if (s.enemy_accel3 >= 18) s.enemy_accel3 = (s.enemy_accel3 / s.enemy_accel3) * 18;
+    if (Math.abs(s.x_change) >= cap) s.x_change = (s.x_change / Math.abs(s.x_change)) * cap;
+    if (Math.abs(s.y_change) >= cap) s.y_change = (s.y_change / Math.abs(s.y_change)) * cap;
+
+    if (s.accel_x === 0) s.x_change *= 0.92;
+    if (s.accel_y === 0) s.y_change *= 0.92;
+
+    s.x += s.x_change;
+    s.y += s.y_change;
+  }
+  if (!stopped) {
+    if (s.enemy_accel >= 14) s.enemy_accel = (s.enemy_accel / s.enemy_accel) * 14;
+    if (s.enemy_accel2 >= 12) s.enemy_accel2 = (s.enemy_accel2 / s.enemy_accel2) * 12;
+    if (s.enemy_accel3 >= 18) s.enemy_accel3 = (s.enemy_accel3 / s.enemy_accel3) * 18;
+  }
   if (s.fade_in >= 1.3) s.fade_in = (s.fade_in / s.fade_in) * 1.3;
-
-  if (s.accel_x === 0) s.x_change *= 0.92;
-  if (s.accel_y === 0) s.y_change *= 0.92;
-
-  s.x += s.x_change;
-  s.y += s.y_change;
 
   const wall1 = drawRect(ctx, grey12, -13, -100, 15, 800);
   const wall2 = drawRect(ctx, grey12, 799, -20, 35, 800);
@@ -429,8 +467,8 @@ export function step(s, events, io) {
   const sprite = drawRect(ctx, s.player_color, s.x, s.y, 50, 50);
   const leftOnMap = [];
   for (const p of s.powerups) {
-    p.ttl -= 1;
-    if (s.cont && collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
+    if (!stopped) p.ttl -= 1;
+    if (!frozen && s.cont && collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
       if (p.type === 'speed') s.speedBoost = BOOST_FRAMES;
       else if (p.type === 'fire') s.fireBoost = BOOST_FRAMES;
       else s.lives = Math.min(MAX_LIVES, s.lives + 1);
@@ -462,148 +500,152 @@ export function step(s, events, io) {
   const bullet3 = drawRect(ctx, s.color3, s.x_enemy3, s.rand3, 20, 7);
   drawRect(ctx, s.color4, s.Warn_goto, s.x_warn, 30, 30); // warning
 
-  if (collide(sprite, wall1)) {
-    s.x_change += 400;
-    sfx('bounce');
-  }
-  if (collide(sprite, wall2)) {
-    s.x_change -= 400;
-    sfx('bounce');
-  }
-
-  if (collide(sprite, wall3)) {
-    s.y_change += 400;
-    sfx('bounce');
-  }
-  if (collide(sprite, wall4)) {
-    s.y_change -= 400;
-    sfx('bounce');
-  }
-
-  s.enemy_accel += 0.001;
-  s.x_enemy += s.enemy_accel;
-
-  s.x_enemy3 += 0.01;
-
-  if (collide(bullet, wall2)) {
-    s.x_enemy = 0;
-    s.count_init += 1;
-  }
-
-  if (collide(bullet, wall2) && s.count_init >= 2 && s.cont === true) {
-    s.x_enemy = 0;
-    s.count += 1;
-    s.color = 'white';
-    s.bulletW = 40;
-    s.bulletH = 20;
-
-    respawnBullet1(s, io, rng);
-
-    if (s.count >= 2) s.score += 1;
-  }
-  if (collide(bullet, sprite) && s.cont === true) {
-    io.report?.('b1');
-    s.x_enemy = 0;
-    s.x_change += 40;
-    knock(s, max_speed);
-    s.lives -= 1;
-    s.rand = rng.randint(30, 540);
-    sfx('ricochet');
-    s.hits = true;
-  }
-  if (s.cont === true && shotHits(bullet)) {
-    io.report?.('b1');
-    respawnBullet1(s, io, rng);
-    sfx('hit');
-    s.x_enemy = 0;
-    s.score += 2;
-  }
-
-  if (levels >= 30 && s.cont === true) {
-    s.enemy_accel2 += 0.0001;
-    s.x_enemy2 += s.enemy_accel2;
-    s.x_enemy21 -= s.enemy_accel2;
-    s.bullet_types = 'Bullets: Normal, Shotgun';
-
-    if (collide(bullet2, wall2)) {
-      s.x_enemy2 = 0;
-      s.rand2 = rng.randint(30, 540);
-      s.color2 = 'yellow';
-      s.score += 1;
+  if (!frozen) {
+    if (collide(sprite, wall1)) {
+      s.x_change += 400;
+      sfx('bounce');
     }
-    if (collide(bullet2, sprite)) {
-      io.report?.('b2');
-      s.x_enemy2 = 0;
+    if (collide(sprite, wall2)) {
+      s.x_change -= 400;
+      sfx('bounce');
+    }
+
+    if (collide(sprite, wall3)) {
+      s.y_change += 400;
+      sfx('bounce');
+    }
+    if (collide(sprite, wall4)) {
+      s.y_change -= 400;
+      sfx('bounce');
+    }
+  }
+
+  if (!stopped) {
+    s.enemy_accel += 0.001;
+    s.x_enemy += s.enemy_accel;
+
+    s.x_enemy3 += 0.01;
+
+    if (collide(bullet, wall2)) {
+      s.x_enemy = 0;
+      s.count_init += 1;
+    }
+
+    if (collide(bullet, wall2) && s.count_init >= 2 && s.cont === true) {
+      s.x_enemy = 0;
+      s.count += 1;
+      s.color = 'white';
+      s.bulletW = 40;
+      s.bulletH = 20;
+
+      respawnBullet1(s, io, rng);
+
+      if (s.count >= 2) s.score += 1;
+    }
+    if (collide(bullet, sprite) && s.cont === true) {
+      io.report?.('b1');
+      s.x_enemy = 0;
       s.x_change += 40;
       knock(s, max_speed);
       s.lives -= 1;
-      s.rand2 = rng.randint(30, 540);
+      s.rand = rng.randint(30, 540);
       sfx('ricochet');
       s.hits = true;
     }
-    if (shotHits(bullet2)) {
-      io.report?.('b2');
-      s.x_enemy2 = 0;
-      s.x_change += 20;
-      knock(s, RECOIL_CAP);
-      s.rand2 = rng.randint(30, 540);
+    if (s.cont === true && shotHits(bullet)) {
+      io.report?.('b1');
+      respawnBullet1(s, io, rng);
       sfx('hit');
+      s.x_enemy = 0;
+      s.score += 2;
     }
 
-    if (collide(bullet21, wall1)) {
-      s.x_enemy21 = 780;
-      s.rand21 = rng.randint(30, 540);
-      s.color21 = 'yellow';
-      s.score += 1;
-    }
-    if (collide(bullet21, sprite)) {
-      io.report?.('b21');
-      s.x_enemy21 = 780;
-      s.x_change -= 40;
-      knock(s, max_speed);
-      s.lives -= 1;
-      s.rand21 = rng.randint(30, 540);
-      sfx('ricochet');
-      s.hits = true;
-    }
-    if (shotHits(bullet21)) {
-      io.report?.('b21');
-      s.x_enemy21 = 780;
-      s.rand21 = rng.randint(30, 540);
-      sfx('hit');
-    }
-  }
+    if (levels >= 30 && s.cont === true) {
+      s.enemy_accel2 += 0.0001;
+      s.x_enemy2 += s.enemy_accel2;
+      s.x_enemy21 -= s.enemy_accel2;
+      s.bullet_types = 'Bullets: Normal, Shotgun';
 
-  if (levels >= 59 && s.cont === true) {
-    s.enemy_accel3 += 0.07;
-    s.x_enemy3 += s.enemy_accel3 * SNIPER_SPEED;
-    s.Warn_goto = 0;
-    s.bullet_types = 'Bullets: Normal, Shotgun, Sniper';
+      if (collide(bullet2, wall2)) {
+        s.x_enemy2 = 0;
+        s.rand2 = rng.randint(30, 540);
+        s.color2 = 'yellow';
+        s.score += 1;
+      }
+      if (collide(bullet2, sprite)) {
+        io.report?.('b2');
+        s.x_enemy2 = 0;
+        s.x_change += 40;
+        knock(s, max_speed);
+        s.lives -= 1;
+        s.rand2 = rng.randint(30, 540);
+        sfx('ricochet');
+        s.hits = true;
+      }
+      if (shotHits(bullet2)) {
+        io.report?.('b2');
+        s.x_enemy2 = 0;
+        s.x_change += 20;
+        knock(s, RECOIL_CAP);
+        s.rand2 = rng.randint(30, 540);
+        sfx('hit');
+      }
 
-    if (collide(bullet3, wall2)) {
-      s.x_enemy3 = 0;
-      s.x_warn = aimY(s, io);
-      s.rand3 = s.x_warn + 11;
-      s.color3 = 'red';
-      s.color4 = 'red';
-      s.score += 1;
+      if (collide(bullet21, wall1)) {
+        s.x_enemy21 = 780;
+        s.rand21 = rng.randint(30, 540);
+        s.color21 = 'yellow';
+        s.score += 1;
+      }
+      if (collide(bullet21, sprite)) {
+        io.report?.('b21');
+        s.x_enemy21 = 780;
+        s.x_change -= 40;
+        knock(s, max_speed);
+        s.lives -= 1;
+        s.rand21 = rng.randint(30, 540);
+        sfx('ricochet');
+        s.hits = true;
+      }
+      if (shotHits(bullet21)) {
+        io.report?.('b21');
+        s.x_enemy21 = 780;
+        s.rand21 = rng.randint(30, 540);
+        sfx('hit');
+      }
     }
 
-    if (collide(bullet3, sprite)) {
-      io.report?.('b3');
-      s.x_change += 40;
-      knock(s, max_speed);
-      s.lives -= 1;
-      s.rand3 = s.x_warn + 11;
-      s.x_enemy3 = 0;
-      sfx('ricochet');
-      s.hits = true;
-    }
-    if (shotHits(bullet3)) {
-      io.report?.('b3');
-      s.rand3 = s.x_warn + 11;
-      s.x_enemy3 = 0;
-      sfx('hit');
+    if (levels >= 59 && s.cont === true) {
+      s.enemy_accel3 += 0.07;
+      s.x_enemy3 += s.enemy_accel3 * SNIPER_SPEED;
+      s.Warn_goto = 0;
+      s.bullet_types = 'Bullets: Normal, Shotgun, Sniper';
+
+      if (collide(bullet3, wall2)) {
+        s.x_enemy3 = 0;
+        s.x_warn = aimY(s, io);
+        s.rand3 = s.x_warn + 11;
+        s.color3 = 'red';
+        s.color4 = 'red';
+        s.score += 1;
+      }
+
+      if (collide(bullet3, sprite)) {
+        io.report?.('b3');
+        s.x_change += 40;
+        knock(s, max_speed);
+        s.lives -= 1;
+        s.rand3 = s.x_warn + 11;
+        s.x_enemy3 = 0;
+        sfx('ricochet');
+        s.hits = true;
+      }
+      if (shotHits(bullet3)) {
+        io.report?.('b3');
+        s.rand3 = s.x_warn + 11;
+        s.x_enemy3 = 0;
+        sfx('hit');
+      }
     }
   }
 
@@ -627,6 +669,25 @@ export function step(s, events, io) {
     if (s.fireBoost > 0) {
       text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
     }
+    const ultColor = s.timeStop > 0 ? [216, 180, 254] : s.ultCooldown > 0 ? [130, 130, 130] : [250, 204, 21];
+    const ultLabel = s.timeStop > 0
+      ? `TIME STOP  ${(s.timeStop / 60).toFixed(1)}s`
+      : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s` : 'ULT READY  [T]';
+    text(ctx, 'bold 18px Arial, sans-serif', ultLabel, ultColor, 680, 580);
+  }
+
+  if (ctx && stopped) {
+    ctx.fillStyle = 'rgba(88, 52, 160, 0.18)';
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    if (s.timeStop > ULT_FRAMES - ULT_BANNER_FRAMES) {
+      text(ctx, 'bold 64px "Times New Roman", Times, serif', 'THE WORLD', [250, 204, 21], 400, 150);
+    }
+  }
+
+  // the host runs the stopped-time clock; guests adopt it from the world broadcast
+  if (stopped && (io.ownsWorld ? io.ownsWorld() : true)) {
+    s.timeStop -= 1;
+    if (s.timeStop === 0) s.timeStopBy = null;
   }
 
   s.death = Math.trunc(pyRound(s.lives));

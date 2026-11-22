@@ -14,7 +14,7 @@ const MAX_CHANNELS = 8; // pygame.mixer default; Sound.play() is silent when all
 // fire.mp3 is 1.9 s: 0.27 s of silence, the bang, then a long tail. Rapid fire plays only
 // the bang, outside the channel pool, so shots are instant and don't pile up.
 const FIRE_CLIP = { offset: 0.26, length: 0.18, fade: 0.05 };
-const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', KeyF: 'f' };
+const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', KeyF: 'f', KeyT: 't' };
 
 function createAudio() {
   const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -26,6 +26,7 @@ function createAudio() {
   musicGain.connect(ac.destination);
   let musicSource = null;
   let musicStartedAt = null; // ac time of the last mixer.music.play()
+  let musicPausedAt = null; // seconds into the track when paused (time stop)
 
   const load = (name) =>
     fetch(`/game/${name}.mp3`)
@@ -84,11 +85,26 @@ function createAudio() {
     music: {
       play() {
         musicStartedAt = ac.currentTime;
+        musicPausedAt = null;
         if (buffers.music) startMusic(0);
       },
       stop() {
         musicStartedAt = null;
+        musicPausedAt = null;
         stopMusic();
+      },
+      pause() {
+        if (musicStartedAt === null) return;
+        musicPausedAt = Math.max(0, ac.currentTime - musicStartedAt);
+        musicStartedAt = null;
+        stopMusic();
+      },
+      resume() {
+        if (musicStartedAt !== null || musicPausedAt === null) return;
+        const offset = musicPausedAt;
+        musicPausedAt = null;
+        musicStartedAt = ac.currentTime - offset;
+        if (buffers.music) startMusic(offset);
       },
       volume(v) {
         musicGain.gain.value = Math.min(1, Math.max(0, v));
@@ -126,6 +142,7 @@ const PadButton = ({ k, onPress, onRelease, children, className = '' }) => (
 
 const Game = ({ onClose }) => {
   const canvasRef = useRef(null);
+  const videoRef = useRef(null);
   const queue = useRef([]);
   const held = useRef(new Set());
   const [run, setRun] = useState(0); // bump to restart, like relaunching the program
@@ -202,6 +219,23 @@ const Game = ({ onClose }) => {
     queue.current = [];
     held.current.clear();
     let mp = null; // multiplayer room, joined once the game starts
+    const video = videoRef.current;
+    let videoOn = false;
+    // the time-stop clip lives above the canvas: play it for the whole stop, with its audio
+    const setVideo = (on) => {
+      if (!video || videoOn === on) return;
+      videoOn = on;
+      if (on) {
+        try { video.currentTime = 0; } catch { /* not seekable yet */ }
+        video.style.opacity = '0.75'; // keep the frozen game visible under the effect
+        video.play().catch(() => {}); // blocked autoplay: the visual simply stays hidden
+      } else {
+        video.pause();
+        try { video.currentTime = 0; } catch { /* not seekable yet */ }
+        video.style.opacity = '0';
+      }
+    };
+    if (video) video.style.opacity = '0';
 
     (async () => {
       const [heart, bullet] = await Promise.all([loadImage('/game/heart.png'), loadImage('/game/bullet.png')]);
@@ -219,7 +253,10 @@ const Game = ({ onClose }) => {
         takeGameOver: () => mp?.takeGameOver() ?? false,
         report: (b) => mp?.report(b),
         reportPickup: (powerupId) => mp?.reportPickup(powerupId),
-        ownsWorld: () => !mp || mp.isHost(),
+        startUlt: (st) => mp?.startUlt(st) ?? false,
+        isUlter: (st) => st.timeStopBy == null || (mp ? mp.isUlter(st) : true),
+        selfId: () => mp?.playerId() ?? null,
+        ownsWorld: () => !mp || mp.isHost() || !mp.isSynced(),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
       };
       if (MULTIPLAYER) {
@@ -243,10 +280,11 @@ const Game = ({ onClose }) => {
           queue.current = [];
           const shown = step(state, events, io);
           if (state.exited) { onCloseRef.current(); return; } // sys.exit() closes the window
+          setVideo(state.timeStop > 0);
           if (shown) {
             screen.drawImage(off, 0, 0); // pygame.display.update()
             mp?.tick(state);
-            mp?.draw(screen, { bullet }); // other players and their shots, on top of your frame
+            mp?.draw(screen, { bullet }, state); // other players and their shots, on top of your frame
           }
           acc -= frame;
           steps += 1;
@@ -260,6 +298,7 @@ const Game = ({ onClose }) => {
     return () => {
       cancelled = true;
       mp?.close();
+      video?.pause();
       setPlayers(1);
       cancelAnimationFrame(raf);
       audio.close();
@@ -310,7 +349,17 @@ const Game = ({ onClose }) => {
             </button>
           </div>
         </div>
-        <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="block aspect-[4/3] w-full bg-[#1f1f1f]" />
+        <div className="relative">
+          <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="block aspect-[4/3] w-full bg-[#1f1f1f]" />
+          <video
+            ref={videoRef}
+            src="/game/timestop.mp4"
+            playsInline
+            preload="auto"
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-200"
+          />
+        </div>
       </motion.div>
 
       {touch ? (
@@ -323,12 +372,15 @@ const Game = ({ onClose }) => {
             <PadButton k="down" onPress={press} onRelease={release}><ArrowDown /></PadButton>
             <PadButton k="right" onPress={press} onRelease={release}><ArrowRight /></PadButton>
           </div>
-          <PadButton k="f" onPress={press} onRelease={release} className="h-20 w-20 rounded-full text-2xl font-bold">F</PadButton>
+          <div className="flex flex-col items-center gap-2">
+            <PadButton k="f" onPress={press} onRelease={release} className="h-20 w-20 rounded-full text-2xl font-bold">F</PadButton>
+            <PadButton k="t" onPress={press} onRelease={release} className="h-12 w-12 rounded-full text-sm font-bold">T</PadButton>
+          </div>
         </div>
       ) : (
         <p className="text-center text-sm text-white/60">
           Press <kbd className="kbd">← ↑ ↓ →</kbd> to move around · press <kbd className="kbd">F</kbd> to fire, hold it to rapid-fire ·{' '}
-          <kbd className="kbd">Esc</kbd> to close
+          <kbd className="kbd">T</kbd> to stop time · <kbd className="kbd">Esc</kbd> to close
         </p>
       )}
     </motion.div>,

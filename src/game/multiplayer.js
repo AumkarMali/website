@@ -6,12 +6,13 @@
 // host, who resets that bullet for everyone. Each player also broadcasts its block and its
 // own shots, drawn translucent on everyone else's screen. Lives and score are per player.
 // Power-up icons are shared: any multiple of 50 points (from any player) drops one on the
-// map, and whoever touches it first gets the boost. When any player dies, the game ends for
-// everyone in it.
+// map, and whoever touches it first gets the boost. The ultimate (T) freezes the shared world
+// for 5 s while the player who used it keeps moving; the host owns that clock too. When any
+// player dies, the game ends for everyone in it.
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_FRAMES } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -62,6 +63,7 @@ export function connect(name, onCount) {
   let worldFrom = null; // host id of pendingWorld
   const events = [];
   const pickups = []; // host: power-up ids other players took since last frame
+  const ultRequests = []; // host: player ids who pressed T since last frame
   const taken = new Map(); // guest: power-up id -> hold-until time
   let gameOver = false; // another player died
   const holds = new Map(); // bullet -> hold-until time
@@ -106,6 +108,9 @@ export function connect(name, onCount) {
     .on('broadcast', { event: 'pickup' }, ({ payload: p }) => {
       if (p?.powerupId && isHost()) pickups.push(p.powerupId);
     })
+    .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
+      if (p?.from && isHost()) ultRequests.push(p.from);
+    })
     .on('presence', { event: 'sync' }, () => {
       const online = channel.presenceState();
       if (online[id]) synced = true;
@@ -129,6 +134,13 @@ export function connect(name, onCount) {
       if (pickups.length && isHost()) {
         const gone = new Set(pickups.splice(0));
         s.powerups = (s.powerups || []).filter((p) => !gone.has(p.id));
+      }
+      if (ultRequests.length && isHost()) {
+        for (const uid of ultRequests.splice(0)) {
+          if (s.timeStop > 0) break;
+          s.timeStop = ULT_FRAMES;
+          s.timeStopBy = uid;
+        }
       }
       for (const g of ghosts.values()) {
         const level = Math.floor((g.score || 0) / POWERUP_EVERY);
@@ -195,6 +207,30 @@ export function connect(name, onCount) {
       channel.send({ type: 'broadcast', event: 'pickup', payload: { powerupId } });
     },
 
+    startUlt(s) {
+      if (isHost()) {
+        if (s.timeStop > 0) return true;
+        s.timeStop = ULT_FRAMES;
+        s.timeStopBy = id;
+        return true;
+      }
+      if (!synced) return false;
+      channel.send({ type: 'broadcast', event: 'ult', payload: { from: id } });
+      return true;
+    },
+
+    isUlter(s) {
+      return s.timeStopBy === id;
+    },
+
+    playerId() {
+      return id;
+    },
+
+    isSynced() {
+      return synced;
+    },
+
     targetY(s) {
       const ys = [];
       if (s.cont) ys.push(s.y);
@@ -202,8 +238,10 @@ export function connect(name, onCount) {
       return ys.length ? ys[Math.floor(Math.random() * ys.length)] : s.y;
     },
 
-    draw(ctx, images = {}) {
+    draw(ctx, images = {}, state = null) {
       const now = performance.now();
+      const stopped = (state?.timeStop ?? 0) > 0;
+      const stopper = state?.timeStopBy ?? null;
       ctx.save();
       ctx.font = '12px Poppins, Arial, sans-serif';
       ctx.textAlign = 'center';
@@ -212,12 +250,16 @@ export function connect(name, onCount) {
           ghosts.delete(gid);
           continue;
         }
-        g.x += (g.tx - g.x) * SMOOTH;
-        g.y += (g.ty - g.y) * SMOOTH;
-        // their shots keep flying between updates
-        ctx.globalAlpha = 0.4;
+        // during a time stop everyone but the player who used it stands still
+        const frozenGhost = stopped && gid !== stopper;
+        if (!frozenGhost) {
+          g.x += (g.tx - g.x) * SMOOTH;
+          g.y += (g.ty - g.y) * SMOOTH;
+        }
+        // their shots keep flying between updates, unless time is stopped
+        ctx.globalAlpha = frozenGhost ? 0.25 : 0.4;
         for (const shot of g.shots) {
-          shot.x -= SHOT_SPEED;
+          if (!frozenGhost) shot.x -= SHOT_SPEED;
           if (images.bullet) ctx.drawImage(images.bullet, Math.trunc(shot.x - 5), Math.trunc(shot.y - 1));
           else {
             ctx.fillStyle = g.color;
@@ -225,10 +267,10 @@ export function connect(name, onCount) {
           }
         }
         g.shots = g.shots.filter((shot) => shot.x > -60);
-        ctx.globalAlpha = g.alive ? 0.45 : 0.15;
+        ctx.globalAlpha = frozenGhost ? 0.2 : g.alive ? 0.45 : 0.15;
         ctx.fillStyle = g.color;
         ctx.fillRect(g.x, g.y, 50, 50);
-        ctx.globalAlpha = g.alive ? 0.9 : 0.35;
+        ctx.globalAlpha = frozenGhost ? 0.5 : g.alive ? 0.9 : 0.35;
         ctx.fillStyle = '#ffffff';
         ctx.fillText(`${g.name} · ${g.score}`, g.x + 25, g.y - 6);
       }
