@@ -42,7 +42,7 @@ export const SLOW_FRAMES = 10 * 60; // enemy-bullet slow power-up lasts 10 s
 // 30 s cooldown, and it can't be used in the first 10 s of the game.
 export const ULT_FRAMES = 10 * 60;
 export const ULT_WINDUP_FRAMES = 2 * 60;
-export const KING_FRAMES = 30 * 60; // King Crimson: 30 s of 25% world speed
+export const KING_FRAMES = 10 * 60; // King Crimson: 10 s of 25% world speed
 export const KING_WINDUP_FRAMES = 110; // ~1.83 s: the effect starts 1.3 s into the scream
 const KING_FX_FRAMES = 60; // ripple runs for 1 s, then the red shade takes over
 export const KILLER_FRAMES = 10 * 60; // Killer Queen: 10 s of blast-radius shots
@@ -639,8 +639,6 @@ export function step(s, events, io) {
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
   const selfId = io.selfId?.() ?? null;
-  const killerOn = hasBuff(s.killerBuffs, selfId);
-  const d4cOn = hasBuff(s.d4cBuffs, selfId);
   const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
@@ -713,6 +711,9 @@ export function step(s, events, io) {
   if (s.slow === 0 && s.slowPrev > 0) clearKingSnapshot(s);
   s.slowPrev = s.slow;
 
+  const killerOn = hasBuff(s.killerBuffs, selfId);
+  const d4cOn = hasBuff(s.d4cBuffs, selfId);
+
   const stopped = s.timeStop > 0;
   const frozen = stopped && !isUlter(s);
   const slowActive = s.slow > 0;
@@ -776,7 +777,9 @@ export function step(s, events, io) {
   music.volume(s.fade_in);
   s.fade_in += 0.0017;
   if (!stopped) s.timer += 0.02 * worldScale;
-  if (!stopped && s.ultCooldown > 0) s.ultCooldown -= 1;
+  // The cooldown only runs outside your active ult, so there is a full 30 s gap afterward.
+  const myUltActive = s.ultWindup > 0 || s.timeStop > 0 || s.kingWindup > 0 || s.slow > 0 || killerOn || d4cOn;
+  if (!myUltActive && s.ultCooldown > 0) s.ultCooldown -= 1;
   const levels = pyRound(s.timer);
 
   const x_round = pyRound(s.x_change);

@@ -478,7 +478,7 @@ const Game = ({ onClose }) => {
               >
                 <span className="block text-base font-bold text-red-200">King Crimson</span>
                 <span className="mt-2 block text-sm text-white/60">
-                  See 30 seconds ahead and move freely — or press T again to erase that future.
+                  See 10 seconds ahead and move freely — or press T again to erase that future.
                 </span>
               </button>
               <button
