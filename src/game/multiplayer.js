@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -149,8 +149,11 @@ export function connect(name, onCount) {
       }
       if (ultRequests.length && isHost()) {
         for (const req of ultRequests.splice(0)) {
-          if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.timer < ULT_MIN_TIMER) break;
-          if (req.type === 'killer') {
+          if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.d4c > 0 || s.timer < ULT_MIN_TIMER) break;
+          if (req.type === 'd4c') {
+            s.d4c = D4C_FRAMES;
+            s.d4cBy = req.id;
+          } else if (req.type === 'killer') {
             s.killer = KILLER_FRAMES;
             s.killerBy = req.id;
           } else if (req.type === 'king') {
@@ -244,8 +247,11 @@ export function connect(name, onCount) {
 
     startUlt(s, type) {
       if (isHost()) {
-        if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.timer < ULT_MIN_TIMER) return true;
-        if (type === 'killer') {
+        if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.d4c > 0 || s.timer < ULT_MIN_TIMER) return true;
+        if (type === 'd4c') {
+          s.d4c = D4C_FRAMES;
+          s.d4cBy = id;
+        } else if (type === 'killer') {
           s.killer = KILLER_FRAMES;
           s.killerBy = id;
         } else if (type === 'king') {
@@ -275,6 +281,10 @@ export function connect(name, onCount) {
       return s.killerBy === id;
     },
 
+    isD4CUlter(s) {
+      return s.d4cBy === id;
+    },
+
     cancelUlt(s) {
       if (isHost()) {
         if (s.slow > 0 && s.slowBy === id) eraseKing(s);
@@ -294,10 +304,18 @@ export function connect(name, onCount) {
     },
 
     targetY(s) {
+      // D4C: never aim a bullet at its protected player.
+      const avoid = s.d4c > 0 ? s.d4cBy : null;
       const ys = [];
-      if (s.cont) ys.push(s.y);
-      for (const g of ghosts.values()) if (g.alive) ys.push(g.ty);
-      return ys.length ? ys[Math.floor(Math.random() * ys.length)] : s.y;
+      if (s.cont && avoid !== id) ys.push(s.y);
+      for (const [gid, g] of ghosts) if (g.alive && gid !== avoid) ys.push(g.ty);
+      if (ys.length) return ys[Math.floor(Math.random() * ys.length)];
+      if (avoid === id) {
+        let y = 30 + Math.random() * 510;
+        if (Math.abs(y - s.y) < 120) y = s.y > 300 ? 30 + Math.random() * 200 : 400 + Math.random() * 140;
+        return y;
+      }
+      return s.y;
     },
 
     draw(ctx, images = {}, state = null) {
@@ -306,6 +324,8 @@ export function connect(name, onCount) {
       const stopper = state?.timeStopBy ?? null;
       const king = (state?.slow ?? 0) > 0;
       const kingBy = state?.slowBy ?? null;
+      const d4cId = (state?.d4c ?? 0) > 0 ? state.d4cBy : null;
+      const d4cAnim = state?.d4cAnim ?? 0;
       ctx.save();
       ctx.font = '12px Poppins, Arial, sans-serif';
       ctx.textAlign = 'center';
@@ -338,6 +358,7 @@ export function connect(name, onCount) {
         ctx.globalAlpha = frozenGhost ? 0.5 : g.alive ? 0.9 : 0.35;
         ctx.fillStyle = '#ffffff';
         ctx.fillText(`${g.name} · ${g.score}`, g.x + 25, g.y - 6);
+        if (d4cId && gid === d4cId) drawD4cOrbit(ctx, g.x + 25, g.y + 25, d4cAnim);
       }
       ctx.restore();
     },

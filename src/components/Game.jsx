@@ -43,6 +43,12 @@ function createAudio() {
   killerGain.connect(ac.destination);
   let killerBuffer = null;
   let killerSource = null;
+  // D4C's line plays instantly when its buff starts
+  const d4cGain = ac.createGain();
+  d4cGain.gain.value = 1;
+  d4cGain.connect(ac.destination);
+  let d4cBuffer = null;
+  let d4cSource = null;
   let musicSource = null;
   // the shot-hit explosion is 3x, while the shoot sound is halved (it was too loud)
   const hitGain = ac.createGain();
@@ -88,6 +94,11 @@ function createAudio() {
     .then((b) => ac.decodeAudioData(b))
     .then((buf) => { killerBuffer = buf; })
     .catch(() => {});
+  fetch('/game/d4c.mp3')
+    .then((r) => r.arrayBuffer())
+    .then((b) => ac.decodeAudioData(b))
+    .then((buf) => { d4cBuffer = buf; })
+    .catch(() => {});
   // The music file is large; if it decodes late, join at the right position.
   load('music').then(() => {
     if (musicStartedAt !== null && buffers.music) startMusic(Math.max(0, ac.currentTime - musicStartedAt));
@@ -100,11 +111,23 @@ function createAudio() {
       try { ultSource?.stop(); } catch { /* ended */ }
       try { kingSource?.stop(); } catch { /* ended */ }
       try { killerSource?.stop(); } catch { /* ended */ }
+      try { d4cSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
       killerSource = null;
+      d4cSource = null;
     },
     sfx(name) {
+      if (name === 'd4c') {
+        if (!d4cBuffer) return;
+        const src = ac.createBufferSource();
+        src.buffer = d4cBuffer;
+        src.connect(d4cGain);
+        src.onended = () => { if (d4cSource === src) d4cSource = null; };
+        d4cSource = src;
+        src.start();
+        return;
+      }
       if (name === 'killer') {
         if (!killerBuffer) return;
         const src = ac.createBufferSource();
@@ -193,9 +216,11 @@ function createAudio() {
       try { ultSource?.stop(); } catch { /* ended */ }
       try { kingSource?.stop(); } catch { /* ended */ }
       try { killerSource?.stop(); } catch { /* ended */ }
+      try { d4cSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
       killerSource = null;
+      d4cSource = null;
       active.forEach((s) => { try { s.stop(); } catch { /* ended */ } });
       ac.close().catch(() => {});
     },
@@ -339,6 +364,7 @@ const Game = ({ onClose }) => {
         isUlter: (st) => st.timeStopBy == null || (mp ? mp.isUlter(st) : true),
         isSlowUlter: (st) => (mp ? mp.isSlowUlter(st) : true),
         isKillerUlter: (st) => (mp ? mp.isKillerUlter(st) : true),
+        isD4CUlter: (st) => (mp ? mp.isD4CUlter(st) : true),
         selfId: () => mp?.playerId() ?? null,
         ownsWorld: () => !mp || mp.isHost() || !mp.isSynced(),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
@@ -437,7 +463,7 @@ const Game = ({ onClose }) => {
         ) : (
           <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-5 overflow-y-auto bg-[#141019] p-5">
             <h2 className="text-center text-xl font-semibold text-white">Choose your ultimate</h2>
-            <div className="grid w-full max-w-2xl gap-3 sm:grid-cols-3">
+            <div className="grid w-full max-w-2xl gap-3 sm:grid-cols-2">
               <button
                 onClick={() => setCharacter('world')}
                 className="rounded-xl border border-violet-400/40 bg-violet-500/10 p-4 text-left transition hover:border-violet-300 hover:bg-violet-500/20"
@@ -463,6 +489,15 @@ const Game = ({ onClose }) => {
                 <span className="block text-base font-bold text-fuchsia-200">Killer Queen</span>
                 <span className="mt-2 block text-sm text-white/60">
                   For 10 seconds your shots blast a wide radius that destroys every enemy bullet it touches.
+                </span>
+              </button>
+              <button
+                onClick={() => setCharacter('d4c')}
+                className="rounded-xl border border-cyan-400/40 bg-cyan-500/10 p-4 text-left transition hover:border-cyan-300 hover:bg-cyan-500/20"
+              >
+                <span className="block text-base font-bold text-cyan-200">D4C</span>
+                <span className="mt-2 block text-sm text-white/60">
+                  For 10 seconds enemy bullets never aim at you — they target another player or a random spot.
                 </span>
               </button>
             </div>

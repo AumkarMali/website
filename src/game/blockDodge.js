@@ -45,6 +45,7 @@ export const KING_WINDUP_FRAMES = 110; // ~1.83 s: the effect starts 1.3 s into 
 const KING_FX_FRAMES = 60; // ripple runs for 1 s, then the red shade takes over
 export const KILLER_FRAMES = 10 * 60; // Killer Queen: 10 s of blast-radius shots
 const KILLER_RADIUS = 140; // px destroyed around each shot hit
+export const D4C_FRAMES = 10 * 60; // D4C: 10 s where enemy bullets never aim at you
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
@@ -164,6 +165,10 @@ export function createState(ultType = 'world') {
     killer: 0, // frames of Killer Queen's blast-radius shots left
     killerBy: null, // id of the player who used Killer Queen
     killerPrev: false, // last frame's killer state, so its clip plays once
+    d4c: 0, // frames of D4C's aim protection left
+    d4cBy: null, // id of the player protected by D4C
+    d4cPrev: false, // last frame's D4C state, so its clip plays once
+    d4cAnim: 0, // frames of D4C's orbit animation
     eraseSeq: 0, // bumps when King Crimson erases time, so guests roll back too
     seenEraseSeq: 0, // last eraseSeq this client restored from
     slowPrev: 0, // last frame's slow, so the snapshot is dropped when the slow ends
@@ -201,7 +206,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
-  'killer', 'killerBy',
+  'killer', 'killerBy', 'd4c', 'd4cBy',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -270,8 +275,16 @@ export function eraseKing(s) {
   kingSnapshots.delete(s);
 }
 
-// Where a new bullet aims: a random living player in multiplayer, otherwise you.
-const aimY = (s, io) => (io.targetY ? io.targetY(s) : s.y);
+// Where a new bullet aims: a random living player in multiplayer, otherwise you. D4C never
+// lets a bullet aim at its protected player.
+const aimY = (s, io) => {
+  if (s.d4c > 0 && s.d4cBy == null) {
+    let y = 30 + Math.random() * 510;
+    if (Math.abs(y - s.y) < 120) y = s.y > 300 ? 30 + Math.random() * 200 : 400 + Math.random() * 140;
+    return y;
+  }
+  return io.targetY ? io.targetY(s) : s.y;
+};
 
 function respawnBullet1(s, io, rng) {
   const ty = aimY(s, io);
@@ -363,12 +376,15 @@ export function spawnPowerup(s, rng = Math.random) {
 // Ultimate: freeze time (The World) or slow the world and rewrite its future (King Crimson).
 function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
-  if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0) return;
+  if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.d4c > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
   if (s.ultType === 'king') saveKingSnapshot(s); // rollback point for the erase
   s.ultCooldown = ULT_COOLDOWN;
   if (io.startUlt?.(s, s.ultType)) return; // host took over, or a guest asked the host
-  if (s.ultType === 'killer') {
+  if (s.ultType === 'd4c') {
+    s.d4c = D4C_FRAMES;
+    s.d4cBy = io.selfId?.() ?? null;
+  } else if (s.ultType === 'killer') {
     s.killer = KILLER_FRAMES;
     s.killerBy = io.selfId?.() ?? null;
   } else if (s.ultType === 'king') {
@@ -424,6 +440,24 @@ function spawnExplosion(s, rect, big = false) {
     max: frames,
     size: big ? KILLER_RADIUS : 25,
   });
+}
+
+// Pink dots orbiting slowly clockwise around the D4C user.
+export function drawD4cOrbit(ctx, cx, cy, t) {
+  if (!ctx) return;
+  const radius = 46;
+  const spin = t * 0.012;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  for (let i = 0; i < 8; i += 1) {
+    const a = spin + (i / 8) * Math.PI * 2;
+    const alpha = 0.28 + 0.3 * (0.5 + 0.5 * Math.sin(a * 2 + spin));
+    ctx.fillStyle = `rgba(244, 114, 182, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
@@ -583,6 +617,7 @@ export function step(s, events, io) {
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
   const isKillerUlter = (st) => (io.isKillerUlter ? io.isKillerUlter(st) : st.killerBy == null);
+  const isD4CUlter = (st) => (io.isD4CUlter ? io.isD4CUlter(st) : st.d4cBy == null);
   const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
@@ -643,6 +678,9 @@ export function step(s, events, io) {
     } else if (s.killer > 0) {
       s.killer -= 1;
       if (s.killer === 0) s.killerBy = null;
+    } else if (s.d4c > 0) {
+      s.d4c -= 1;
+      if (s.d4c === 0) s.d4cBy = null;
     }
   }
 
@@ -673,6 +711,10 @@ export function step(s, events, io) {
   // Killer Queen just plays its clip once; the BGM and the world keep running
   if (s.killer > 0 && !s.killerPrev) sfx('killer');
   s.killerPrev = s.killer > 0;
+  if (s.d4c > 0 && !s.d4cPrev) sfx('d4c');
+  s.d4cPrev = s.d4c > 0;
+  if (s.d4c > 0) s.d4cAnim += 1;
+  else s.d4cAnim = 0;
 
   // King Crimson's random future: everyone but the ult user wanders on autopilot.
   const aiControlled = slowActive && !isSlowUlter(s);
@@ -1121,6 +1163,9 @@ export function step(s, events, io) {
   for (const e of s.explosions) e.ttl -= 1;
   s.explosions = s.explosions.filter((e) => e.ttl > 0);
 
+  // D4C: pink dots orbit the protected player
+  if (ctx && s.d4c > 0 && isD4CUlter(s)) drawD4cOrbit(ctx, s.x + 25, s.y + 25, s.d4cAnim);
+
   // every multiple of 50 points adds an icon to the shared map; only the host (or a single
   // player) creates them, but every player tracks the level so joining the host role later
   // doesn't drop a backlog of icons
@@ -1142,11 +1187,13 @@ export function step(s, events, io) {
       text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
     }
     const ultLocked = s.timer < ULT_MIN_TIMER;
-    const ultColor = s.killer > 0
-      ? [244, 114, 182]
-      : s.slow > 0 || s.kingWindup > 0
-        ? [248, 113, 113]
-        : s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
+    const ultColor = s.d4c > 0
+      ? [34, 211, 238]
+      : s.killer > 0
+        ? [244, 114, 182]
+        : s.slow > 0 || s.kingWindup > 0
+          ? [248, 113, 113]
+          : s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
     const ultLabel = s.timeStop > 0
       ? `TIME STOP  ${(s.timeStop / 60).toFixed(1)}s`
       : s.ultWindup > 0
@@ -1157,11 +1204,14 @@ export function step(s, events, io) {
             ? `KING CRIMSON IN  ${(s.kingWindup / 60).toFixed(1)}s`
             : s.killer > 0
               ? `KILLER QUEEN  ${(s.killer / 60).toFixed(1)}s`
-              : ultLocked
-                ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
-                : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
-                  : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
-                    : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
+              : s.d4c > 0
+                ? `D4C  ${(s.d4c / 60).toFixed(1)}s`
+                : ultLocked
+                  ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
+                  : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
+                    : s.ultType === 'd4c' ? 'D4C READY [T]'
+                      : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
+                        : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
     text(ctx, 'bold 18px Arial, sans-serif', ultLabel, ultColor, 680, 580);
   }
 
