@@ -49,6 +49,12 @@ function createAudio() {
   d4cGain.connect(ac.destination);
   let d4cBuffer = null;
   let d4cSource = null;
+  // C-Moon's summon
+  const cmoonGain = ac.createGain();
+  cmoonGain.gain.value = 1;
+  cmoonGain.connect(ac.destination);
+  let cmoonBuffer = null;
+  let cmoonSource = null;
   let musicSource = null;
   // the shot-hit explosion is 3x, while the shoot sound is halved (it was too loud)
   const hitGain = ac.createGain();
@@ -99,6 +105,11 @@ function createAudio() {
     .then((b) => ac.decodeAudioData(b))
     .then((buf) => { d4cBuffer = buf; })
     .catch(() => {});
+  fetch('/game/cmoon.mp3')
+    .then((r) => r.arrayBuffer())
+    .then((b) => ac.decodeAudioData(b))
+    .then((buf) => { cmoonBuffer = buf; })
+    .catch(() => {});
   // The music file is large; if it decodes late, join at the right position.
   load('music').then(() => {
     if (musicStartedAt !== null && buffers.music) startMusic(Math.max(0, ac.currentTime - musicStartedAt));
@@ -112,12 +123,24 @@ function createAudio() {
       try { kingSource?.stop(); } catch { /* ended */ }
       try { killerSource?.stop(); } catch { /* ended */ }
       try { d4cSource?.stop(); } catch { /* ended */ }
+      try { cmoonSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
       killerSource = null;
       d4cSource = null;
+      cmoonSource = null;
     },
     sfx(name) {
+      if (name === 'cmoon') {
+        if (!cmoonBuffer) return;
+        const src = ac.createBufferSource();
+        src.buffer = cmoonBuffer;
+        src.connect(cmoonGain);
+        src.onended = () => { if (cmoonSource === src) cmoonSource = null; };
+        cmoonSource = src;
+        src.start();
+        return;
+      }
       if (name === 'd4c') {
         if (!d4cBuffer) return;
         const src = ac.createBufferSource();
@@ -217,10 +240,12 @@ function createAudio() {
       try { kingSource?.stop(); } catch { /* ended */ }
       try { killerSource?.stop(); } catch { /* ended */ }
       try { d4cSource?.stop(); } catch { /* ended */ }
+      try { cmoonSource?.stop(); } catch { /* ended */ }
       ultSource = null;
       kingSource = null;
       killerSource = null;
       d4cSource = null;
+      cmoonSource = null;
       active.forEach((s) => { try { s.stop(); } catch { /* ended */ } });
       ac.close().catch(() => {});
     },
@@ -367,6 +392,7 @@ const Game = ({ onClose }) => {
         isSlowUlter: (st) => (mp ? mp.isSlowUlter(st) : true),
         selfId: () => mp?.playerId() ?? null,
         online: () => !!mp,
+        buffTarget: (st, buffId) => (mp ? mp.buffTarget(st, buffId) : { x: st.x + 25, y: st.y + 25 }),
         ownsWorld: () => !mp || mp.isHost() || !mp.isSynced(),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
       };
@@ -464,7 +490,7 @@ const Game = ({ onClose }) => {
         ) : (
           <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-5 overflow-y-auto bg-[#141019] p-5">
             <h2 className="text-center text-xl font-semibold text-white">Choose your ultimate</h2>
-            <div className="grid w-full max-w-2xl gap-3 sm:grid-cols-2">
+            <div className="grid w-full max-w-2xl gap-3 sm:grid-cols-3">
               <button
                 onClick={() => setCharacter('world')}
                 className="rounded-xl border border-violet-400/40 bg-violet-500/10 p-4 text-left transition hover:border-violet-300 hover:bg-violet-500/20"
@@ -499,6 +525,15 @@ const Game = ({ onClose }) => {
                 <span className="block text-base font-bold text-cyan-200">D4C</span>
                 <span className="mt-2 block text-sm text-white/60">
                   For 10 seconds enemy bullets never aim at you — they target another player or a random spot.
+                </span>
+              </button>
+              <button
+                onClick={() => setCharacter('cmoon')}
+                className="rounded-xl border border-emerald-400/40 bg-emerald-500/10 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-500/20"
+              >
+                <span className="block text-base font-bold text-emerald-200">C-Moon</span>
+                <span className="mt-2 block text-sm text-white/60">
+                  For 10 seconds enemy bullets accelerate toward you, and you absorb any that touch you.
                 </span>
               </button>
             </div>

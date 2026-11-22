@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -122,7 +122,7 @@ export function connect(name, onCount) {
       if (typeof p?.x === 'number' && typeof p?.y === 'number') booms.push({ x: p.x, y: p.y, big: !!p.big });
     })
     .on('broadcast', { event: 'ultsound' }, ({ payload: p }) => {
-      if (p?.type === 'killer' || p?.type === 'd4c') ultSounds.push(p.type);
+      if (p?.type === 'killer' || p?.type === 'd4c' || p?.type === 'cmoon') ultSounds.push(p.type);
     })
     .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
       if (p?.from && isHost()) ultRequests.push({ id: p.from, type: p.type });
@@ -160,7 +160,9 @@ export function connect(name, onCount) {
       if (ultRequests.length && isHost()) {
         for (const req of ultRequests.splice(0)) {
           if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
-          if (req.type === 'd4c') {
+          if (req.type === 'cmoon') {
+            addBuff(s.cMoonBuffs, req.id, CMOON_FRAMES);
+          } else if (req.type === 'd4c') {
             addBuff(s.d4cBuffs, req.id, D4C_FRAMES);
           } else if (req.type === 'killer') {
             addBuff(s.killerBuffs, req.id, KILLER_FRAMES);
@@ -266,7 +268,9 @@ export function connect(name, onCount) {
     startUlt(s, type) {
       if (isHost()) {
         if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
-        if (type === 'd4c') {
+        if (type === 'cmoon') {
+          addBuff(s.cMoonBuffs, id, CMOON_FRAMES);
+        } else if (type === 'd4c') {
           addBuff(s.d4cBuffs, id, D4C_FRAMES);
         } else if (type === 'killer') {
           addBuff(s.killerBuffs, id, KILLER_FRAMES);
@@ -324,6 +328,12 @@ export function connect(name, onCount) {
         return y;
       }
       return s.y;
+    },
+
+    buffTarget(s, buffId) {
+      if (buffId === id) return { x: s.x + 25, y: s.y + 25 };
+      const g = ghosts.get(buffId);
+      return g ? { x: g.x + 25, y: g.y + 25 } : null;
     },
 
     draw(ctx, images = {}, state = null) {

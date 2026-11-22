@@ -51,6 +51,9 @@ export const KILLER_FRAMES = 10 * 60; // Killer Queen: 10 s of blast-radius shot
 const KILLER_RADIUS = 140; // px destroyed around each shot hit
 export const D4C_FRAMES = 10 * 60; // D4C: 10 s where enemy bullets never aim at you
 const D4C_COOLDOWN = 20 * 60; // D4C's reuse gap is 20 s instead of the usual 30 s
+export const CMOON_FRAMES = 10 * 60; // C-Moon: 10 s of bullet gravity + absorption
+const CMOON_ACCEL = 0.16; // px/frame^2 enemy bullets accelerate toward a C-Moon user
+const CMOON_MAX_SPEED = 6; // cap on the gravity velocity so they don't orbit wildly
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
@@ -171,6 +174,11 @@ export function createState(ultType = 'world') {
     slowAnim: 0, // frames since King Crimson's slow started, for its ripple
     killerBuffs: [], // [{ id, frames }] players with Killer Queen's blast shots active
     d4cBuffs: [], // [{ id, frames }] players protected by D4C
+    cMoonBuffs: [], // [{ id, frames }] players pulling and absorbing bullets with C-Moon
+    gv1x: 0, gv1y: 0, // C-Moon gravity velocity added to each enemy bullet
+    gv2x: 0, gv2y: 0,
+    gv21x: 0, gv21y: 0,
+    gv3x: 0, gv3y: 0,
     d4cAnim: 0, // frames of D4C's orbit animation
     eraseSeq: 0, // bumps when King Crimson erases time, so guests roll back too
     seenEraseSeq: 0, // last eraseSeq this client restored from
@@ -210,7 +218,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
-  'killerBuffs', 'd4cBuffs', 'bulletSlow',
+  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -408,14 +416,16 @@ function tryUlt(s, io, frozen) {
   const selfId = io.selfId?.() ?? null;
   if (s.ultType === 'killer' && hasBuff(s.killerBuffs, selfId)) return;
   if (s.ultType === 'd4c' && hasBuff(s.d4cBuffs, selfId)) return;
+  if (s.ultType === 'cmoon' && hasBuff(s.cMoonBuffs, selfId)) return;
   if (s.ultType === 'king') saveKingSnapshot(s); // rollback point for the erase
   s.ultCooldown = s.ultType === 'd4c' ? D4C_COOLDOWN : ULT_COOLDOWN;
-  if (s.ultType === 'killer' || s.ultType === 'd4c') {
+  if (s.ultType === 'killer' || s.ultType === 'd4c' || s.ultType === 'cmoon') {
     io.sfx?.(s.ultType); // local activation clip
     io.sendUltSound?.(s.ultType); // and the same clip on everyone else's screen
   }
   if (io.startUlt?.(s, s.ultType)) return; // host took over, or a guest asked the host
-  if (s.ultType === 'd4c') addBuff(s.d4cBuffs, selfId, D4C_FRAMES);
+  if (s.ultType === 'cmoon') addBuff(s.cMoonBuffs, selfId, CMOON_FRAMES);
+  else if (s.ultType === 'd4c') addBuff(s.d4cBuffs, selfId, D4C_FRAMES);
   else if (s.ultType === 'killer') addBuff(s.killerBuffs, selfId, KILLER_FRAMES);
   else if (s.ultType === 'king') {
     s.kingWindup = KING_WINDUP_FRAMES;
@@ -612,7 +622,7 @@ export function drawUltOverlay(ctx, s) {
  * @param s       state from createState()
  * @param events  [{type: 'keydown'|'keyup', key: 'left'|'right'|'up'|'down'|'f'|'t'}] for this frame
  * @param io      { ctx?, images?: {heart, bullet}, rng, sfx?(name), music?: {play(), stop(), volume(v)},
- *                  isUlter?(s), isSlowUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), online?(), ownsWorld?(),
+ *                  isUlter?(s), isSlowUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), online?(), ownsWorld?(), buffTarget?(s, id),
  *                  takeBooms?(), sendBoom?(x, y, big), takeUltSounds?(), sendUltSound?(type) }
  */
 export function step(s, events, io) {
@@ -713,8 +723,10 @@ export function step(s, events, io) {
     if (s.timeStop === 0) {
       for (const b of s.killerBuffs) b.frames -= 1;
       for (const b of s.d4cBuffs) b.frames -= 1;
+      for (const b of s.cMoonBuffs) b.frames -= 1;
       s.killerBuffs = s.killerBuffs.filter((b) => b.frames > 0);
       s.d4cBuffs = s.d4cBuffs.filter((b) => b.frames > 0);
+      s.cMoonBuffs = s.cMoonBuffs.filter((b) => b.frames > 0);
       if (s.bulletSlow > 0) s.bulletSlow -= 1;
     }
   }
@@ -725,6 +737,7 @@ export function step(s, events, io) {
 
   const killerOn = hasBuff(s.killerBuffs, selfId);
   const d4cOn = hasBuff(s.d4cBuffs, selfId);
+  const cMoonOn = hasBuff(s.cMoonBuffs, selfId);
 
   const stopped = s.timeStop > 0;
   const frozen = stopped && !isUlter(s);
@@ -796,7 +809,7 @@ export function step(s, events, io) {
   s.fade_in += 0.0017;
   if (!stopped) s.timer += 0.02 * worldScale;
   // The cooldown only runs outside your active ult, so there is a full 30 s gap afterward.
-  const myUltActive = s.ultWindup > 0 || s.timeStop > 0 || s.kingWindup > 0 || s.slow > 0 || killerOn || d4cOn;
+  const myUltActive = s.ultWindup > 0 || s.timeStop > 0 || s.kingWindup > 0 || s.slow > 0 || killerOn || d4cOn || cMoonOn;
   if (!myUltActive && s.ultCooldown > 0) s.ultCooldown -= 1;
   const levels = pyRound(s.timer);
 
@@ -895,6 +908,51 @@ export function step(s, events, io) {
     return true;
   };
 
+  // C-Moon: enemy bullets accelerate toward the nearest C-Moon player. The velocity keeps
+  // building while the pull is active (and is dropped when C-Moon ends), so paths curve.
+  if (!stopped) {
+    const targets = [];
+    for (const b of s.cMoonBuffs) {
+      const t = io.buffTarget ? io.buffTarget(s, b.id) : { x: s.x + 25, y: s.y + 25 };
+      if (t) targets.push(t);
+    }
+    const pull = CMOON_ACCEL * bulletScale;
+    const apply = (bx, by, w, h, vx, vy) => {
+      if (!targets.length) return [bx, by, 0, 0];
+      const cx = bx + w / 2;
+      const cy = by + h / 2;
+      let tx = 0;
+      let ty = 0;
+      let bd = Infinity;
+      for (const t of targets) {
+        const d = Math.hypot(t.x - cx, t.y - cy);
+        if (d < bd) {
+          bd = d;
+          tx = t.x;
+          ty = t.y;
+        }
+      }
+      if (bd < 1) return [bx, by, vx, vy];
+      vx = (vx + ((tx - cx) / bd) * pull) * 0.995;
+      vy = (vy + ((ty - cy) / bd) * pull) * 0.995;
+      const sp = Math.hypot(vx, vy);
+      if (sp > CMOON_MAX_SPEED) {
+        vx = (vx / sp) * CMOON_MAX_SPEED;
+        vy = (vy / sp) * CMOON_MAX_SPEED;
+      }
+      return [bx + vx, by + vy, vx, vy];
+    };
+    // a bullet that just respawned starts its gravity velocity fresh
+    if (s.x_enemy <= 1) { s.gv1x = 0; s.gv1y = 0; }
+    if (s.x_enemy2 <= 1) { s.gv2x = 0; s.gv2y = 0; }
+    if (s.x_enemy21 >= WIDTH - 21) { s.gv21x = 0; s.gv21y = 0; }
+    if (s.x_enemy3 <= 1) { s.gv3x = 0; s.gv3y = 0; }
+    [s.x_enemy, s.rand, s.gv1x, s.gv1y] = apply(s.x_enemy, s.rand, s.bulletW, s.bulletH, s.gv1x, s.gv1y);
+    [s.x_enemy2, s.rand2, s.gv2x, s.gv2y] = apply(s.x_enemy2, s.rand2, 20, 15, s.gv2x, s.gv2y);
+    [s.x_enemy21, s.rand21, s.gv21x, s.gv21y] = apply(s.x_enemy21, s.rand21, 20, 15, s.gv21x, s.gv21y);
+    [s.x_enemy3, s.rand3, s.gv3x, s.gv3y] = apply(s.x_enemy3, s.rand3, 20, 7, s.gv3x, s.gv3y);
+  }
+
   const bullet = drawRect(ctx, s.color, s.x_enemy, s.rand, s.bulletW, s.bulletH);
   const bullet2 = drawRect(ctx, s.color2, s.x_enemy2, s.rand2, 20, 15);
   const bullet21 = drawRect(ctx, s.color21, s.x_enemy21, s.rand21, 20, 15);
@@ -978,9 +1036,14 @@ export function step(s, events, io) {
 
       if (s.count >= 2) s.score += 1;
     }
-    if (collide(bullet, sprite) && s.cont === true) {
-      io.report?.('b1');
-      s.x_enemy = 0;
+  if (collide(bullet, sprite) && s.cont === true) {
+    io.report?.('b1');
+    s.x_enemy = 0;
+    if (cMoonOn) {
+      respawnBullet1(s, io, rng);
+      sfx('hit');
+      spawnExplosion(s, bullet);
+    } else {
       s.x_change += 40;
       knock(s, max_speed);
       s.lives -= 1;
@@ -988,6 +1051,7 @@ export function step(s, events, io) {
       sfx('ricochet');
       s.hits = true;
     }
+  }
     if (s.cont === true && shotHits(bullet)) {
       io.report?.('b1');
       respawnBullet1(s, io, rng);
@@ -1012,12 +1076,17 @@ export function step(s, events, io) {
       if (collide(bullet2, sprite)) {
         io.report?.('b2');
         s.x_enemy2 = 0;
-        s.x_change += 40;
-        knock(s, max_speed);
-        s.lives -= 1;
         s.rand2 = rng.randint(30, 540);
-        sfx('ricochet');
-        s.hits = true;
+        if (cMoonOn) {
+          sfx('hit');
+          spawnExplosion(s, bullet2);
+        } else {
+          s.x_change += 40;
+          knock(s, max_speed);
+          s.lives -= 1;
+          sfx('ricochet');
+          s.hits = true;
+        }
       }
       if (shotHits(bullet2)) {
         io.report?.('b2');
@@ -1038,12 +1107,17 @@ export function step(s, events, io) {
       if (collide(bullet21, sprite)) {
         io.report?.('b21');
         s.x_enemy21 = 780;
-        s.x_change -= 40;
-        knock(s, max_speed);
-        s.lives -= 1;
         s.rand21 = rng.randint(30, 540);
-        sfx('ricochet');
-        s.hits = true;
+        if (cMoonOn) {
+          sfx('hit');
+          spawnExplosion(s, bullet21);
+        } else {
+          s.x_change -= 40;
+          knock(s, max_speed);
+          s.lives -= 1;
+          sfx('ricochet');
+          s.hits = true;
+        }
       }
       if (shotHits(bullet21)) {
         io.report?.('b21');
@@ -1069,16 +1143,21 @@ export function step(s, events, io) {
         s.score += 1;
       }
 
-      if (collide(bullet3, sprite)) {
-        io.report?.('b3');
+    if (collide(bullet3, sprite)) {
+      io.report?.('b3');
+      s.x_enemy3 = 0;
+      s.rand3 = s.x_warn + 11;
+      if (cMoonOn) {
+        sfx('hit');
+        spawnExplosion(s, bullet3);
+      } else {
         s.x_change += 40;
         knock(s, max_speed);
         s.lives -= 1;
-        s.rand3 = s.x_warn + 11;
-        s.x_enemy3 = 0;
         sfx('ricochet');
         s.hits = true;
       }
+    }
       if (shotHits(bullet3)) {
         io.report?.('b3');
         s.rand3 = s.x_warn + 11;
@@ -1098,43 +1177,63 @@ export function step(s, events, io) {
       stopHit.b1 = true;
       io.report?.('b1');
       s.x_enemy = -60;
-      s.x_change += 40;
-      knock(s, max_speed);
-      s.lives -= 1;
-      sfx('ricochet');
-      s.hits = true;
-    }
-    if (levels >= 30) {
-      if (collide(bullet2, sprite)) {
-        stopHit.b2 = true;
-        io.report?.('b2');
-        s.x_enemy2 = -60;
+      if (cMoonOn) {
+        sfx('hit');
+        spawnExplosion(s, bullet);
+      } else {
         s.x_change += 40;
         knock(s, max_speed);
         s.lives -= 1;
         sfx('ricochet');
         s.hits = true;
       }
+    }
+    if (levels >= 30) {
+      if (collide(bullet2, sprite)) {
+        stopHit.b2 = true;
+        io.report?.('b2');
+        s.x_enemy2 = -60;
+        if (cMoonOn) {
+          sfx('hit');
+          spawnExplosion(s, bullet2);
+        } else {
+          s.x_change += 40;
+          knock(s, max_speed);
+          s.lives -= 1;
+          sfx('ricochet');
+          s.hits = true;
+        }
+      }
       if (collide(bullet21, sprite)) {
         stopHit.b21 = true;
         io.report?.('b21');
         s.x_enemy21 = 860;
-        s.x_change -= 40;
-        knock(s, max_speed);
-        s.lives -= 1;
-        sfx('ricochet');
-        s.hits = true;
+        if (cMoonOn) {
+          sfx('hit');
+          spawnExplosion(s, bullet21);
+        } else {
+          s.x_change -= 40;
+          knock(s, max_speed);
+          s.lives -= 1;
+          sfx('ricochet');
+          s.hits = true;
+        }
       }
     }
     if (levels >= 59 && collide(bullet3, sprite)) {
       stopHit.b3 = true;
       io.report?.('b3');
       s.x_enemy3 = -60;
-      s.x_change += 40;
-      knock(s, max_speed);
-      s.lives -= 1;
-      sfx('ricochet');
-      s.hits = true;
+      if (cMoonOn) {
+        sfx('hit');
+        spawnExplosion(s, bullet3);
+      } else {
+        s.x_change += 40;
+        knock(s, max_speed);
+        s.lives -= 1;
+        sfx('ricochet');
+        s.hits = true;
+      }
     }
 
     if (!frozen) {
@@ -1238,13 +1337,16 @@ export function step(s, events, io) {
     const ultLocked = s.timer < ULT_MIN_TIMER;
     const myD4C = s.d4cBuffs.find((b) => b.id === selfId);
     const myKiller = s.killerBuffs.find((b) => b.id === selfId);
+    const myCMoon = s.cMoonBuffs.find((b) => b.id === selfId);
     const ultColor = myD4C
       ? [34, 211, 238]
       : myKiller
         ? [244, 114, 182]
-        : s.slow > 0 || s.kingWindup > 0
-          ? [248, 113, 113]
-          : s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
+        : myCMoon
+          ? [167, 139, 250]
+          : s.slow > 0 || s.kingWindup > 0
+            ? [248, 113, 113]
+            : s.timeStop > 0 || s.ultWindup > 0 ? [216, 180, 254] : s.ultCooldown > 0 || ultLocked ? [130, 130, 130] : [250, 204, 21];
     const ultLabel = s.timeStop > 0
       ? `TIME STOP  ${(s.timeStop / 60).toFixed(1)}s`
       : s.ultWindup > 0
@@ -1257,12 +1359,15 @@ export function step(s, events, io) {
               ? `KILLER QUEEN  ${(myKiller.frames / 60).toFixed(1)}s`
               : myD4C
                 ? `D4C  ${(myD4C.frames / 60).toFixed(1)}s`
-                : ultLocked
-                  ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
-                  : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
-                    : s.ultType === 'd4c' ? 'D4C READY [T]'
-                      : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
-                        : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
+                : myCMoon
+                  ? `C-MOON  ${(myCMoon.frames / 60).toFixed(1)}s`
+                  : ultLocked
+                    ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
+                    : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
+                      : s.ultType === 'cmoon' ? 'C-MOON READY [T]'
+                        : s.ultType === 'd4c' ? 'D4C READY [T]'
+                          : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
+                            : s.ultType === 'king' ? 'KING CRIMSON READY [T]' : 'THE WORLD READY [T]';
     text(ctx, 'bold 18px Arial, sans-serif', ultLabel, ultColor, 680, 580);
   }
 
