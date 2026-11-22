@@ -1285,6 +1285,18 @@ export function step(s, events, io) {
   const gap = 45;
   for (let h = 0; h < s.death; h += 1) blit(ctx, images.heart, 500 + h * gap, 2);
 
+  // In multiplayer, show your own heart count in the middle of your square too.
+  if (ctx && io.online?.()) {
+    const cx = s.x + 25;
+    const cy = s.y + 25;
+    if (images.heart) {
+      ctx.drawImage(images.heart, cx - 9, cy - 18, 18, 17);
+      text(ctx, 'bold 18px Arial, sans-serif', String(s.death), [255, 255, 255], cx, cy + 8);
+    } else {
+      text(ctx, 'bold 20px Arial, sans-serif', String(s.death), [255, 255, 255], cx, cy);
+    }
+  }
+
   blit(ctx, images.bullet, s.new_x - 5, s.new_y - 1); // loaded bullets
   blit(ctx, images.bullet, s.new_x2 - 5, s.new_y2 - 1);
   for (const shot of s.shots) blit(ctx, images.bullet, shot.x - 5, shot.y - 1);

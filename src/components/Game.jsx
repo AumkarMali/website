@@ -392,7 +392,7 @@ const Game = ({ onClose }) => {
           if (shown) {
             screen.drawImage(off, 0, 0); // pygame.display.update()
             mp?.tick(state);
-            mp?.draw(screen, { bullet }, state); // other players and their shots, on top of your frame
+            mp?.draw(screen, { bullet, heart }, state); // other players and their shots, on top of your frame
             drawUltOverlay(screen, state); // time-stop tint and ripples over everything
           }
           acc -= frame;

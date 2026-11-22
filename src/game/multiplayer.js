@@ -100,8 +100,8 @@ export function connect(name, onCount) {
       const now = performance.now();
       const g = ghosts.get(p.id);
       const shots = (p.shots || []).map(([x, y]) => ({ x, y }));
-      if (g) Object.assign(g, { name: p.name, tx: p.x, ty: p.y, score: p.score, alive: p.alive, shots, seen: now });
-      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, alive: p.alive, level: Math.floor((p.score || 0) / POWERUP_EVERY), shots, seen: now });
+      if (g) Object.assign(g, { name: p.name, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, alive: p.alive, shots, seen: now });
+      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, alive: p.alive, level: Math.floor((p.score || 0) / POWERUP_EVERY), shots, seen: now });
     })
     .on('broadcast', { event: 'world' }, ({ payload: p }) => {
       if (!p || p.from === id || p.from !== hostId()) return; // only the current host's world counts
@@ -193,6 +193,7 @@ export function connect(name, onCount) {
             x: Math.round(s.x),
             y: Math.round(s.y),
             score: Math.trunc(s.score),
+            hearts: Math.max(0, s.death),
             alive,
             shots: s.shots.slice(-MAX_SHOTS).map((b) => [Math.round(b.x), Math.round(b.y)]),
           },
@@ -352,6 +353,24 @@ export function connect(name, onCount) {
         ctx.globalAlpha = frozenGhost ? 0.5 : g.alive ? 0.9 : 0.35;
         ctx.fillStyle = '#ffffff';
         ctx.fillText(`${g.name} · ${g.score}`, g.x + 25, g.y - 6);
+        // heart count in the middle of the square, visible to everyone
+        const hx = g.x + 25;
+        const hy = g.y + 25;
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        if (images.heart) {
+          ctx.drawImage(images.heart, hx - 9, hy - 18, 18, 17);
+          ctx.font = 'bold 18px Poppins, Arial, sans-serif';
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(String(g.hearts ?? 3), hx, hy + 8);
+        } else {
+          ctx.font = 'bold 20px Poppins, Arial, sans-serif';
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(String(g.hearts ?? 3), hx, hy);
+        }
+        ctx.restore();
         if (d4cIds.has(gid)) drawD4cOrbit(ctx, g.x + 25, g.y + 25, d4cAnim);
       }
       ctx.restore();
