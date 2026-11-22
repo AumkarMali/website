@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, RotateCcw, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, RotateCcw, Users, X } from 'lucide-react';
 import { createState, step, FPS, WIDTH, HEIGHT } from '../game/blockDodge';
+// Supabase is only downloaded when the game opens, and only if it's configured.
+const MULTIPLAYER = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+
+const NAME_KEY = 'blockdodge-name';
+const cleanName = (n) => n.replace(/[^A-Za-z0-9 _.-]/g, '').slice(0, 16).trim();
 
 const SOUNDS = ['countdown', 'bounce', 'fire', 'hit', 'ricochet', 'outro'];
 const MAX_CHANNELS = 8; // pygame.mixer default; Sound.play() is silent when all are busy
@@ -125,6 +130,13 @@ const Game = ({ onClose }) => {
   const held = useRef(new Set());
   const [run, setRun] = useState(0); // bump to restart, like relaunching the program
   const [touch] = useState(() => window.matchMedia('(pointer: coarse)').matches);
+  const [name, setName] = useState(
+    () => localStorage.getItem(NAME_KEY) || `Player ${Math.floor(1000 + Math.random() * 9000)}`
+  );
+  const nameRef = useRef(name);
+  nameRef.current = cleanName(name) || 'Player';
+  const [players, setPlayers] = useState(1);
+  useEffect(() => { localStorage.setItem(NAME_KEY, name); }, [name]);
   // A new onClose each parent render must not restart the game.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -151,6 +163,7 @@ const Game = ({ onClose }) => {
   useEffect(() => {
     const down = (e) => {
       if (e.code === 'Escape') { onCloseRef.current(); return; }
+      if (e.target instanceof HTMLInputElement) return; // typing your name doesn't move the block
       const key = KEYS[e.code];
       if (!key) return;
       e.preventDefault();
@@ -188,6 +201,7 @@ const Game = ({ onClose }) => {
     const state = createState();
     queue.current = [];
     held.current.clear();
+    let mp = null; // multiplayer room, joined once the game starts
 
     (async () => {
       const [heart, bullet] = await Promise.all([loadImage('/game/heart.png'), loadImage('/game/bullet.png')]);
@@ -195,6 +209,13 @@ const Game = ({ onClose }) => {
       await audio.ready;
       if (cancelled) return;
       const io = { ctx: offCtx, images: { heart, bullet }, sfx: (n) => audio.sfx(n), music: audio.music };
+      if (MULTIPLAYER) {
+        import('../game/multiplayer')
+          .then(({ connect }) => {
+            if (!cancelled) mp = connect(() => nameRef.current, setPlayers);
+          })
+          .catch(() => {}); // offline: stay single-player
+      }
       audio.sfx('countdown'); // Countdown.play() runs once before the loop
 
       const frame = 1000 / FPS;
@@ -209,7 +230,11 @@ const Game = ({ onClose }) => {
           queue.current = [];
           const shown = step(state, events, io);
           if (state.exited) { onCloseRef.current(); return; } // sys.exit() closes the window
-          if (shown) screen.drawImage(off, 0, 0); // pygame.display.update()
+          if (shown) {
+            screen.drawImage(off, 0, 0); // pygame.display.update()
+            mp?.send(state);
+            mp?.draw(screen); // other players, on top of your frame
+          }
           acc -= frame;
           steps += 1;
         }
@@ -221,6 +246,8 @@ const Game = ({ onClose }) => {
 
     return () => {
       cancelled = true;
+      mp?.close();
+      setPlayers(1);
       cancelAnimationFrame(raf);
       audio.close();
     };
@@ -245,6 +272,22 @@ const Game = ({ onClose }) => {
           <span className="flex items-center gap-2">
             <img src="/game/bullet.png" alt="" className="h-3" /> Block dodge
           </span>
+          {MULTIPLAYER && (
+            <div className="flex items-center gap-2">
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value.slice(0, 16))}
+                onBlur={() => setName((n) => cleanName(n) || 'Player')}
+                maxLength={16}
+                aria-label="Your name"
+                title="Your name, shown to other players"
+                className="w-28 rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs outline-none focus:border-orange-500"
+              />
+              <span className="flex items-center gap-1 text-xs text-neutral-600" title="Players in the game right now">
+                <Users size={13} /> {players} playing
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-1">
             <button onClick={() => setRun((r) => r + 1)} className="rounded p-1 hover:bg-neutral-300" aria-label="Restart" title="Restart">
               <RotateCcw size={14} />
