@@ -41,7 +41,9 @@ const MAX_LIVES = 3;
 export const ULT_FRAMES = 10 * 60;
 export const ULT_WINDUP_FRAMES = 2 * 60;
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
-const ULT_FX_FRAMES = 307; // the clip is ~5.1 s: ripples stop when the audio ends
+const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
+const ULT_FX_DELAY_FRAMES = 90; // the ripple starts 1.5 s after the clip starts
+const ULT_FX_FRAMES = ULT_AUDIO_FRAMES - ULT_FX_DELAY_FRAMES; // ripples stop when the audio ends
 const ULT_COOLDOWN = 30 * 60;
 // After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
 // can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
@@ -347,8 +349,8 @@ function blit(ctx, img, x, y) {
 // after the ghost players, so it tints everything and every client sees the same effect.
 export function drawUltOverlay(ctx, s) {
   const active = s.timeStop > 0 || s.ultWindup > 0;
-  if (!ctx || !active || s.ultAnim <= 0) return;
-  const t = s.ultAnim;
+  const t = s.ultAnim - ULT_FX_DELAY_FRAMES;
+  if (!ctx || !active || t <= 0) return;
   const cx = WIDTH / 2;
   const cy = HEIGHT / 2;
   // time slowly drains the colour while the stop lasts
