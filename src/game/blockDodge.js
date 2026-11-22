@@ -41,6 +41,7 @@ const MAX_LIVES = 3;
 export const ULT_FRAMES = 10 * 60;
 export const ULT_WINDUP_FRAMES = 2 * 60;
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
+const ULT_FX_FRAMES = 307; // the clip is ~5.1 s: ripples stop when the audio ends
 const ULT_COOLDOWN = 30 * 60;
 // After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
 // can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
@@ -198,20 +199,29 @@ function respawnBullet1(s, io, rng) {
 }
 
 // Host side: another player was hit by, or shot down, this bullet. Reset it for everyone.
+// During a time stop the bullet is parked off-screen instead, so no new enemy bullet appears
+// until time resumes.
 export function applyRemoteHit(s, bullet, io) {
   const rng = io.rng || mathRandomRng;
+  const stopped = s.timeStop > 0;
   if (bullet === 'b1') {
-    s.x_enemy = 0;
-    respawnBullet1(s, io, rng);
+    s.x_enemy = stopped ? -60 : 0;
+    if (!stopped) respawnBullet1(s, io, rng);
   } else if (bullet === 'b2') {
-    s.x_enemy2 = 0;
-    s.rand2 = rng.randint(30, 540);
+    if (stopped) s.x_enemy2 = -60;
+    else {
+      s.x_enemy2 = 0;
+      s.rand2 = rng.randint(30, 540);
+    }
   } else if (bullet === 'b21') {
-    s.x_enemy21 = 780;
-    s.rand21 = rng.randint(30, 540);
+    if (stopped) s.x_enemy21 = 860;
+    else {
+      s.x_enemy21 = 780;
+      s.rand21 = rng.randint(30, 540);
+    }
   } else if (bullet === 'b3') {
-    s.rand3 = s.x_warn + 11;
-    s.x_enemy3 = 0;
+    s.x_enemy3 = stopped ? -60 : 0;
+    if (!stopped) s.rand3 = s.x_warn + 11;
   }
 }
 
@@ -346,22 +356,24 @@ export function drawUltOverlay(ctx, s) {
   ctx.save();
   ctx.fillStyle = `rgba(90, 56, 200, ${wash})`;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
-  const LIFE = 96; // frames for one ripple to cross the screen
-  for (let i = 0; i < 4; i += 1) {
-    const phase = ((t + (i * LIFE) / 4) % LIFE) / LIFE;
-    const radius = phase * 760;
-    ctx.strokeStyle = `rgba(205, 196, 255, ${(1 - phase) * 0.4})`;
-    ctx.lineWidth = 2 + 3 * (1 - phase);
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  if (t < 12) { // opening flash
-    ctx.fillStyle = `rgba(255, 255, 255, ${0.3 * (1 - t / 12)})`;
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
-  }
-  if (t < ULT_WINDUP_FRAMES) {
-    text(ctx, 'bold 60px "Times New Roman", Times, serif', 'THE WORLD', [250, 204, 21], cx, 150);
+  if (t <= ULT_FX_FRAMES) {
+    const LIFE = 96; // frames for one ripple to cross the screen
+    for (let i = 0; i < 4; i += 1) {
+      const phase = ((t + (i * LIFE) / 4) % LIFE) / LIFE;
+      const radius = phase * 760;
+      ctx.strokeStyle = `rgba(205, 196, 255, ${(1 - phase) * 0.4})`;
+      ctx.lineWidth = 2 + 3 * (1 - phase);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (t < 12) { // opening flash
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.3 * (1 - t / 12)})`;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    }
+    if (t < ULT_WINDUP_FRAMES) {
+      text(ctx, 'bold 60px "Times New Roman", Times, serif', 'THE WORLD', [250, 204, 21], cx, 150);
+    }
   }
   ctx.restore();
 }
@@ -559,21 +571,23 @@ export function step(s, events, io) {
   drawRect(ctx, s.color4, s.Warn_goto, s.x_warn, 30, 30); // warning
 
   if (!frozen) {
+    // A bounce is always the normal max speed, even during a 2x speed boost: the 400 impulse
+    // used to be clamped by the boosted cap, which made boosted wall bounces twice as fast.
     if (collide(sprite, wall1)) {
-      s.x_change += 400;
+      s.x_change = max_speed;
       sfx('bounce');
     }
     if (collide(sprite, wall2)) {
-      s.x_change -= 400;
+      s.x_change = -max_speed;
       sfx('bounce');
     }
 
     if (collide(sprite, wall3)) {
-      s.y_change += 400;
+      s.y_change = max_speed;
       sfx('bounce');
     }
     if (collide(sprite, wall4)) {
-      s.y_change -= 400;
+      s.y_change = -max_speed;
       sfx('bounce');
     }
   }
@@ -707,37 +721,80 @@ export function step(s, events, io) {
     }
   }
 
-  // During the stop the world is frozen, but the player who used the ultimate can still shoot
-  // the frozen bullets: only the shot-hit branches run, movement and damage stay paused.
-  if (stopped && !frozen && s.cont) {
-    if (shotHits(bullet)) {
+  // During the stop the world is frozen, but bullets still hit players and the player who
+  // used the ultimate can still shoot them. Destroyed bullets are parked off-screen instead
+  // of respawning, so no new enemy bullets appear until time resumes.
+  if (stopped && s.cont) {
+    const stopHit = { b1: false, b2: false, b21: false, b3: false };
+    if (collide(bullet, sprite)) {
+      stopHit.b1 = true;
       io.report?.('b1');
-      respawnBullet1(s, io, rng);
-      sfx('hit');
-      s.x_enemy = 0;
-      s.score += 2;
+      s.x_enemy = -60;
+      s.x_change += 40;
+      knock(s, max_speed);
+      s.lives -= 1;
+      sfx('ricochet');
+      s.hits = true;
     }
     if (levels >= 30) {
-      if (shotHits(bullet2)) {
+      if (collide(bullet2, sprite)) {
+        stopHit.b2 = true;
         io.report?.('b2');
-        s.x_enemy2 = 0;
-        s.x_change += 20;
-        knock(s, RECOIL_CAP);
-        s.rand2 = rng.randint(30, 540);
-        sfx('hit');
+        s.x_enemy2 = -60;
+        s.x_change += 40;
+        knock(s, max_speed);
+        s.lives -= 1;
+        sfx('ricochet');
+        s.hits = true;
       }
-      if (shotHits(bullet21)) {
+      if (collide(bullet21, sprite)) {
+        stopHit.b21 = true;
         io.report?.('b21');
-        s.x_enemy21 = 780;
-        s.rand21 = rng.randint(30, 540);
-        sfx('hit');
+        s.x_enemy21 = 860;
+        s.x_change -= 40;
+        knock(s, max_speed);
+        s.lives -= 1;
+        sfx('ricochet');
+        s.hits = true;
       }
     }
-    if (levels >= 59 && shotHits(bullet3)) {
+    if (levels >= 59 && collide(bullet3, sprite)) {
+      stopHit.b3 = true;
       io.report?.('b3');
-      s.rand3 = s.x_warn + 11;
-      s.x_enemy3 = 0;
-      sfx('hit');
+      s.x_enemy3 = -60;
+      s.x_change += 40;
+      knock(s, max_speed);
+      s.lives -= 1;
+      sfx('ricochet');
+      s.hits = true;
+    }
+
+    if (!frozen) {
+      if (!stopHit.b1 && shotHits(bullet)) {
+        io.report?.('b1');
+        sfx('hit');
+        s.x_enemy = -60;
+        s.score += 2;
+      }
+      if (levels >= 30) {
+        if (!stopHit.b2 && shotHits(bullet2)) {
+          io.report?.('b2');
+          s.x_enemy2 = -60;
+          s.x_change += 20;
+          knock(s, RECOIL_CAP);
+          sfx('hit');
+        }
+        if (!stopHit.b21 && shotHits(bullet21)) {
+          io.report?.('b21');
+          s.x_enemy21 = 860;
+          sfx('hit');
+        }
+      }
+      if (levels >= 59 && !stopHit.b3 && shotHits(bullet3)) {
+        io.report?.('b3');
+        s.x_enemy3 = -60;
+        sfx('hit');
+      }
     }
   }
 
