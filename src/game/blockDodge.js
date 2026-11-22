@@ -43,7 +43,8 @@ export const ULT_WINDUP_FRAMES = 2 * 60;
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
 const ULT_FX_DELAY_FRAMES = 90; // the ripple starts 1.5 s after the clip starts
-const ULT_FX_FRAMES = ULT_AUDIO_FRAMES - ULT_FX_DELAY_FRAMES; // ripples stop when the audio ends
+const ULT_FX_CUT_FRAMES = 18; // the ripple stops 0.3 s before the clip ends
+const ULT_FX_FRAMES = ULT_AUDIO_FRAMES - ULT_FX_DELAY_FRAMES - ULT_FX_CUT_FRAMES;
 const ULT_COOLDOWN = 30 * 60;
 // After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
 // can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
