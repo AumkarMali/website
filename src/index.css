@@ -280,6 +280,20 @@ body.blockdodge-active #root *::after {
   animation-play-state: paused !important;
 }
 
+/* The site's custom cursor lives inside #root (hidden), and the site disables the native
+   cursor globally. Give the native cursor back while the game is open. */
+body.blockdodge-active,
+body.blockdodge-active * {
+  cursor: auto !important;
+}
+body.blockdodge-active button,
+body.blockdodge-active [role="button"] {
+  cursor: pointer !important;
+}
+body.blockdodge-active input {
+  cursor: text !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

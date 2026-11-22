@@ -139,6 +139,7 @@ export function createState(ultType = 'world') {
     final_score: 'GAME OVER',
     bullet_types: 'Bullets: Normal',
     death: 3,
+    remoteKO: false, // the game ended because another player died (King Crimson may erase it)
     shots: [], // fired bullets: {x, y, lower}
     nextLower: true, // barrel for the next shot
     fHeld: false,
@@ -258,6 +259,7 @@ export function eraseKing(s) {
   s.slowBy = null;
   s.eraseSeq = (s.eraseSeq || 0) + 1;
   s.seenEraseSeq = s.eraseSeq;
+  s.remoteKO = false;
   s.ultActivePrev = true;
   kingSnapshots.delete(s);
 }
@@ -541,7 +543,10 @@ export function step(s, events, io) {
     s.seenEraseSeq = s.eraseSeq;
     restoreKingSnapshot(s, true);
   }
-  if (io.takeGameOver?.() && s.cont) s.lives = 0; // another player died: the game ends for everyone
+  if (io.takeGameOver?.() && s.cont) {
+    s.lives = 0; // another player died: the game ends for everyone
+    s.remoteKO = true;
+  }
   for (const bullet of io.takeEvents?.() ?? []) applyRemoteHit(s, bullet, io);
   const sfx = io.sfx || (() => {});
   const music = io.music || { play() {}, stop() {}, volume() {} };
@@ -561,7 +566,8 @@ export function step(s, events, io) {
       }
 
       if (event.key === 't') {
-        if (s.slow > 0 && isSlowUlter(s)) {
+        // A remote player's death can be erased; dying in your own time erase cannot.
+        if (s.slow > 0 && isSlowUlter(s) && (s.cont || s.remoteKO)) {
           // second press: erase the random future and return everyone to normal speed
           io.stopUlt?.();
           if (!io.cancelUlt?.(s)) {
@@ -1083,7 +1089,8 @@ export function step(s, events, io) {
   if (s.death <= 0) s.cont = false;
 
   if (s.cont === false) {
-    music.stop();
+    if (music.pause) music.pause(); // keep the offset so an erase can resume it
+    else music.stop?.();
     s.rand = 0;
     s.x_enemy = 0;
     s.x_enemy2 = 0;
