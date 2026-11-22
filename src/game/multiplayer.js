@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -30,6 +30,9 @@ const SMOOTH = 0.25; // per-frame approach to a ghost's latest position (hides t
 const SHOT_SPEED = 13; // matches the game: shots move 13 px per frame
 const KING_SLOW = 0.25; // King Crimson: everything but the user moves at 25%
 const MAX_SHOTS = 24;
+const addBuff = (list, id, frames) => {
+  if (!list.some((b) => b.id === id)) list.push({ id, frames });
+};
 const COLORS = ['#f97316', '#22c55e', '#e879f9', '#facc15', '#38bdf8', '#f43f5e'];
 
 let client = null;
@@ -145,17 +148,18 @@ export function connect(name, onCount) {
       // an icon whenever any player's score crosses a multiple of 50.
       if (pickups.length && isHost()) {
         const gone = new Set(pickups.splice(0));
+        for (const p of s.powerups || []) {
+          if (gone.has(p.id) && p.type === 'slow') s.bulletSlow = Math.max(s.bulletSlow || 0, SLOW_FRAMES);
+        }
         s.powerups = (s.powerups || []).filter((p) => !gone.has(p.id));
       }
       if (ultRequests.length && isHost()) {
         for (const req of ultRequests.splice(0)) {
-          if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.d4c > 0 || s.timer < ULT_MIN_TIMER) break;
+          if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
           if (req.type === 'd4c') {
-            s.d4c = D4C_FRAMES;
-            s.d4cBy = req.id;
+            addBuff(s.d4cBuffs, req.id, D4C_FRAMES);
           } else if (req.type === 'killer') {
-            s.killer = KILLER_FRAMES;
-            s.killerBy = req.id;
+            addBuff(s.killerBuffs, req.id, KILLER_FRAMES);
           } else if (req.type === 'king') {
             saveKingSnapshot(s);
             s.kingWindup = KING_WINDUP_FRAMES;
@@ -247,13 +251,11 @@ export function connect(name, onCount) {
 
     startUlt(s, type) {
       if (isHost()) {
-        if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.d4c > 0 || s.timer < ULT_MIN_TIMER) return true;
+        if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
         if (type === 'd4c') {
-          s.d4c = D4C_FRAMES;
-          s.d4cBy = id;
+          addBuff(s.d4cBuffs, id, D4C_FRAMES);
         } else if (type === 'killer') {
-          s.killer = KILLER_FRAMES;
-          s.killerBy = id;
+          addBuff(s.killerBuffs, id, KILLER_FRAMES);
         } else if (type === 'king') {
           saveKingSnapshot(s);
           s.kingWindup = KING_WINDUP_FRAMES;
@@ -277,14 +279,6 @@ export function connect(name, onCount) {
       return s.slowBy === id;
     },
 
-    isKillerUlter(s) {
-      return s.killerBy === id;
-    },
-
-    isD4CUlter(s) {
-      return s.d4cBy === id;
-    },
-
     cancelUlt(s) {
       if (isHost()) {
         if (s.slow > 0 && s.slowBy === id) eraseKing(s);
@@ -304,13 +298,13 @@ export function connect(name, onCount) {
     },
 
     targetY(s) {
-      // D4C: never aim a bullet at its protected player.
-      const avoid = s.d4c > 0 ? s.d4cBy : null;
+      // D4C: never aim a bullet at any player it is protecting.
+      const avoid = new Set((s.d4cBuffs || []).map((b) => b.id));
       const ys = [];
-      if (s.cont && avoid !== id) ys.push(s.y);
-      for (const [gid, g] of ghosts) if (g.alive && gid !== avoid) ys.push(g.ty);
+      if (s.cont && !avoid.has(id)) ys.push(s.y);
+      for (const [gid, g] of ghosts) if (g.alive && !avoid.has(gid)) ys.push(g.ty);
       if (ys.length) return ys[Math.floor(Math.random() * ys.length)];
-      if (avoid === id) {
+      if (avoid.has(id)) {
         let y = 30 + Math.random() * 510;
         if (Math.abs(y - s.y) < 120) y = s.y > 300 ? 30 + Math.random() * 200 : 400 + Math.random() * 140;
         return y;
@@ -324,7 +318,7 @@ export function connect(name, onCount) {
       const stopper = state?.timeStopBy ?? null;
       const king = (state?.slow ?? 0) > 0;
       const kingBy = state?.slowBy ?? null;
-      const d4cId = (state?.d4c ?? 0) > 0 ? state.d4cBy : null;
+      const d4cIds = new Set(((state?.d4cBuffs) || []).map((b) => b.id));
       const d4cAnim = state?.d4cAnim ?? 0;
       ctx.save();
       ctx.font = '12px Poppins, Arial, sans-serif';
@@ -358,7 +352,7 @@ export function connect(name, onCount) {
         ctx.globalAlpha = frozenGhost ? 0.5 : g.alive ? 0.9 : 0.35;
         ctx.fillStyle = '#ffffff';
         ctx.fillText(`${g.name} · ${g.score}`, g.x + 25, g.y - 6);
-        if (d4cId && gid === d4cId) drawD4cOrbit(ctx, g.x + 25, g.y + 25, d4cAnim);
+        if (d4cIds.has(gid)) drawD4cOrbit(ctx, g.x + 25, g.y + 25, d4cAnim);
       }
       ctx.restore();
     },

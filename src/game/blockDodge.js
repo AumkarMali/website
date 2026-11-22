@@ -25,15 +25,17 @@ export const FPS = 60;
 const FIRE_EVERY = 9; // frames between shots while F is held: 0.15 s at 60 FPS
 const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
 // Power-up: every time any player reaches a multiple of 50 points, a random icon appears at
-// a random spot: 10 s of 2x speed, 10 s of 2x fire rate, or an extra life (up to MAX_LIVES).
+// a random spot: 10 s of 2x speed, 10 s of 2x fire rate, 10 s of half-speed enemy bullets,
+// or an extra life (up to MAX_LIVES).
 // Icons stay on the field until someone picks them up or the 50 s lifetime runs out.
 const POWERUP_EVERY = 50;
 const POWERUP_FRAMES = 50 * 60; // icon disappears after 50 s if nobody picks it up
 const POWERUP_SIZE = 30;
 const BOOST_FRAMES = 10 * 60;
 const BOOST = 2;
-const POWERUP_TYPES = ['speed', 'fire', 'life'];
+const POWERUP_TYPES = ['speed', 'fire', 'life', 'slow'];
 const MAX_LIVES = 3;
+export const SLOW_FRAMES = 10 * 60; // enemy-bullet slow power-up lasts 10 s
 // Ultimate, "the world": pressing T starts the clip and a 2 s windup while the game still
 // runs; after that time stops for 10 s. Enemy bullets, the level clock, power-up timers and
 // every other player freeze; the player who used it can still move, shoot and pick up icons.
@@ -162,12 +164,8 @@ export function createState(ultType = 'world') {
     slowBy: null, // id of the player who used King Crimson
     kingWindup: 0, // frames of the King Crimson scream before the slow starts
     slowAnim: 0, // frames since King Crimson's slow started, for its ripple
-    killer: 0, // frames of Killer Queen's blast-radius shots left
-    killerBy: null, // id of the player who used Killer Queen
-    killerPrev: false, // last frame's killer state, so its clip plays once
-    d4c: 0, // frames of D4C's aim protection left
-    d4cBy: null, // id of the player protected by D4C
-    d4cPrev: false, // last frame's D4C state, so its clip plays once
+    killerBuffs: [], // [{ id, frames }] players with Killer Queen's blast shots active
+    d4cBuffs: [], // [{ id, frames }] players protected by D4C
     d4cAnim: 0, // frames of D4C's orbit animation
     eraseSeq: 0, // bumps when King Crimson erases time, so guests roll back too
     seenEraseSeq: 0, // last eraseSeq this client restored from
@@ -179,6 +177,7 @@ export function createState(ultType = 'world') {
     aiPrev: false, // were we on autopilot last frame?
     speedBoost: 0, // frames of 2x speed left
     fireBoost: 0, // frames of 2x fire rate left
+    bulletSlow: 0, // frames of half-speed enemy bullets left (shared power-up)
     knock: 0, // frames of knockback speed limit left
     knockCap: 7,
     firedThisFrame: false,
@@ -206,7 +205,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
-  'killer', 'killerBy', 'd4c', 'd4cBy',
+  'killerBuffs', 'd4cBuffs', 'bulletSlow',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -219,6 +218,12 @@ export const getWorld = (s) => Object.fromEntries(WORLD_KEYS.map((k) => [k, s[k]
 export function applyWorld(s, w) {
   for (const k of WORLD_KEYS) if (k in w) s[k] = w[k];
 }
+
+// ---- Personal ult buffs (Killer Queen / D4C) ----
+const hasBuff = (list, id) => (list || []).some((b) => b.id === id);
+const addBuff = (list, id, frames) => {
+  if (!hasBuff(list, id)) list.push({ id, frames });
+};
 
 // ---- King Crimson rollback ----
 // The exact state at the moment T is pressed is kept here; erasing the future restores it.
@@ -278,7 +283,9 @@ export function eraseKing(s) {
 // Where a new bullet aims: a random living player in multiplayer, otherwise you. D4C never
 // lets a bullet aim at its protected player.
 const aimY = (s, io) => {
-  if (s.d4c > 0 && s.d4cBy == null) {
+  const online = io.online ? io.online() : false;
+  const selfId = io.selfId?.() ?? null;
+  if (!online && hasBuff(s.d4cBuffs, selfId)) {
     let y = 30 + Math.random() * 510;
     if (Math.abs(y - s.y) < 120) y = s.y > 300 ? 30 + Math.random() * 200 : 400 + Math.random() * 140;
     return y;
@@ -327,7 +334,7 @@ function drawPowerup(ctx, p, images = {}) {
   const cx = p.x + r;
   const cy = p.y + r;
   const pulse = 1 + 0.12 * Math.sin(p.ttl / 6);
-  const color = { speed: '#facc15', fire: '#fb923c', life: '#ef4444' }[p.type];
+  const color = { speed: '#facc15', fire: '#fb923c', life: '#ef4444', slow: '#38bdf8' }[p.type];
   ctx.save();
   ctx.globalAlpha = p.ttl < 120 && Math.floor(p.ttl / 8) % 2 === 0 ? 0.35 : 1; // blink before it goes
   ctx.shadowColor = color;
@@ -344,6 +351,20 @@ function drawPowerup(ctx, p, images = {}) {
     if (p.type === 'fire' && images.bullet) {
       ctx.drawImage(images.bullet, cx - 11, cy - 11, 22, 11);
       ctx.drawImage(images.bullet, cx - 11, cy + 1, 22, 11);
+    } else if (p.type === 'slow') {
+      ctx.fillStyle = '#1f1f1f'; // hourglass
+      ctx.beginPath();
+      ctx.moveTo(cx - 8, cy - 9);
+      ctx.lineTo(cx + 8, cy - 9);
+      ctx.lineTo(cx, cy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(cx - 8, cy + 9);
+      ctx.lineTo(cx + 8, cy + 9);
+      ctx.lineTo(cx, cy);
+      ctx.closePath();
+      ctx.fill();
     } else {
       ctx.fillStyle = '#1f1f1f';
       ctx.beginPath(); // lightning bolt
@@ -373,26 +394,27 @@ export function spawnPowerup(s, rng = Math.random) {
   });
 }
 
-// Ultimate: freeze time (The World) or slow the world and rewrite its future (King Crimson).
+// Ultimate: freeze time (The World), slow the world (King Crimson), or a personal buff
+// (Killer Queen / D4C). Personal buffs can overlap across players.
 function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
-  if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.killer > 0 || s.d4c > 0) return;
+  if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
+  const selfId = io.selfId?.() ?? null;
+  if (s.ultType === 'killer' && hasBuff(s.killerBuffs, selfId)) return;
+  if (s.ultType === 'd4c' && hasBuff(s.d4cBuffs, selfId)) return;
   if (s.ultType === 'king') saveKingSnapshot(s); // rollback point for the erase
   s.ultCooldown = ULT_COOLDOWN;
+  if (s.ultType === 'killer' || s.ultType === 'd4c') io.sfx?.(s.ultType); // personal clip
   if (io.startUlt?.(s, s.ultType)) return; // host took over, or a guest asked the host
-  if (s.ultType === 'd4c') {
-    s.d4c = D4C_FRAMES;
-    s.d4cBy = io.selfId?.() ?? null;
-  } else if (s.ultType === 'killer') {
-    s.killer = KILLER_FRAMES;
-    s.killerBy = io.selfId?.() ?? null;
-  } else if (s.ultType === 'king') {
+  if (s.ultType === 'd4c') addBuff(s.d4cBuffs, selfId, D4C_FRAMES);
+  else if (s.ultType === 'killer') addBuff(s.killerBuffs, selfId, KILLER_FRAMES);
+  else if (s.ultType === 'king') {
     s.kingWindup = KING_WINDUP_FRAMES;
-    s.slowBy = io.selfId?.() ?? null;
+    s.slowBy = selfId;
   } else {
     s.ultWindup = ULT_WINDUP_FRAMES;
-    s.timeStopBy = io.selfId?.() ?? null;
+    s.timeStopBy = selfId;
   }
 }
 
@@ -580,8 +602,8 @@ export function drawUltOverlay(ctx, s) {
  * @param s       state from createState()
  * @param events  [{type: 'keydown'|'keyup', key: 'left'|'right'|'up'|'down'|'f'|'t'}] for this frame
  * @param io      { ctx?, images?: {heart, bullet}, rng, sfx?(name), music?: {play(), stop(), volume(v)},
- *                  isUlter?(s), isSlowUlter?(s), isKillerUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), ownsWorld?(),
- *                  takeBooms?(), sendBoom?(x, y) }
+ *                  isUlter?(s), isSlowUlter?(s), startUlt?(s, type), cancelUlt?(s), stopUlt?(), selfId?(), online?(), ownsWorld?(),
+ *                  takeBooms?(), sendBoom?(x, y, big) }
  */
 export function step(s, events, io) {
   const { ctx = null, images = {}, rng = mathRandomRng } = io;
@@ -616,8 +638,9 @@ export function step(s, events, io) {
   const music = io.music || { play() {}, stop() {}, volume() {} };
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
-  const isKillerUlter = (st) => (io.isKillerUlter ? io.isKillerUlter(st) : st.killerBy == null);
-  const isD4CUlter = (st) => (io.isD4CUlter ? io.isD4CUlter(st) : st.d4cBy == null);
+  const selfId = io.selfId?.() ?? null;
+  const killerOn = hasBuff(s.killerBuffs, selfId);
+  const d4cOn = hasBuff(s.d4cBuffs, selfId);
   const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
@@ -675,12 +698,14 @@ export function step(s, events, io) {
     } else if (s.slow > 0) {
       s.slow -= 1;
       if (s.slow === 0) s.slowBy = null;
-    } else if (s.killer > 0) {
-      s.killer -= 1;
-      if (s.killer === 0) s.killerBy = null;
-    } else if (s.d4c > 0) {
-      s.d4c -= 1;
-      if (s.d4c === 0) s.d4cBy = null;
+    }
+    // personal buffs tick unless time is fully stopped; they keep running during King Crimson
+    if (s.timeStop === 0) {
+      for (const b of s.killerBuffs) b.frames -= 1;
+      for (const b of s.d4cBuffs) b.frames -= 1;
+      s.killerBuffs = s.killerBuffs.filter((b) => b.frames > 0);
+      s.d4cBuffs = s.d4cBuffs.filter((b) => b.frames > 0);
+      if (s.bulletSlow > 0) s.bulletSlow -= 1;
     }
   }
 
@@ -692,6 +717,7 @@ export function step(s, events, io) {
   const frozen = stopped && !isUlter(s);
   const slowActive = s.slow > 0;
   const worldScale = slowActive ? SLOW : 1; // enemy bullets and the level clock
+  const bulletScale = worldScale * (s.bulletSlow > 0 ? 0.5 : 1); // slow power-up halves bullet speed too
   const selfScale = slowActive && !isSlowUlter(s) ? SLOW : 1; // everyone but the King Crimson user
   const ultActive = stopped || s.ultWindup > 0 || slowActive || s.kingWindup > 0;
 
@@ -708,13 +734,9 @@ export function step(s, events, io) {
   else s.ultAnim = 0;
   if (slowActive) s.slowAnim += 1;
   else s.slowAnim = 0;
-  // Killer Queen just plays its clip once; the BGM and the world keep running
-  if (s.killer > 0 && !s.killerPrev) sfx('killer');
-  s.killerPrev = s.killer > 0;
-  if (s.d4c > 0 && !s.d4cPrev) sfx('d4c');
-  s.d4cPrev = s.d4c > 0;
-  if (s.d4c > 0) s.d4cAnim += 1;
-  else s.d4cAnim = 0;
+  // D4C's orbit keeps spinning unless a time stop freezes the world
+  if (s.d4cBuffs.length > 0 && s.timeStop === 0) s.d4cAnim += 1;
+  else if (s.d4cBuffs.length === 0) s.d4cAnim = 0;
 
   // King Crimson's random future: everyone but the ult user wanders on autopilot.
   const aiControlled = slowActive && !isSlowUlter(s);
@@ -828,6 +850,7 @@ export function step(s, events, io) {
     if (!frozen && s.cont && collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
       if (p.type === 'speed') s.speedBoost = BOOST_FRAMES;
       else if (p.type === 'fire') s.fireBoost = BOOST_FRAMES;
+      else if (p.type === 'slow') s.bulletSlow = SLOW_FRAMES;
       else s.lives = Math.min(MAX_LIVES, s.lives + 1);
       io.reportPickup?.(p.id);
       sfx('bounce');
@@ -859,7 +882,7 @@ export function step(s, events, io) {
 
   // Killer Queen: each shot hit blasts a wide radius and wipes nearby enemy bullets too.
   const shotExplosion = (rect, type) => {
-    const big = s.killer > 0 && isKillerUlter(s);
+    const big = killerOn;
     spawnExplosion(s, rect, big);
     const cx = rect.x + rect.w / 2;
     const cy = rect.y + rect.h / 2;
@@ -914,9 +937,9 @@ export function step(s, events, io) {
 
   if (!stopped) {
     s.enemy_accel += 0.001;
-    s.x_enemy += s.enemy_accel * worldScale;
+    s.x_enemy += s.enemy_accel * bulletScale;
 
-    s.x_enemy3 += 0.01 * worldScale;
+    s.x_enemy3 += 0.01 * bulletScale;
 
     if (collide(bullet, wall2)) {
       s.x_enemy = 0;
@@ -955,8 +978,8 @@ export function step(s, events, io) {
 
     if (levels >= 30 && s.cont === true) {
       s.enemy_accel2 += 0.0001;
-      s.x_enemy2 += s.enemy_accel2 * worldScale;
-      s.x_enemy21 -= s.enemy_accel2 * worldScale;
+      s.x_enemy2 += s.enemy_accel2 * bulletScale;
+      s.x_enemy21 -= s.enemy_accel2 * bulletScale;
       s.bullet_types = 'Bullets: Normal, Shotgun';
 
       if (collide(bullet2, wall2)) {
@@ -1012,7 +1035,7 @@ export function step(s, events, io) {
 
     if (levels >= 59 && s.cont === true) {
       s.enemy_accel3 += 0.07;
-      s.x_enemy3 += s.enemy_accel3 * SNIPER_SPEED * worldScale;
+      s.x_enemy3 += s.enemy_accel3 * SNIPER_SPEED * bulletScale;
       s.Warn_goto = 0;
       s.bullet_types = 'Bullets: Normal, Shotgun, Sniper';
 
@@ -1164,7 +1187,7 @@ export function step(s, events, io) {
   s.explosions = s.explosions.filter((e) => e.ttl > 0);
 
   // D4C: pink dots orbit the protected player
-  if (ctx && s.d4c > 0 && isD4CUlter(s)) drawD4cOrbit(ctx, s.x + 25, s.y + 25, s.d4cAnim);
+  if (ctx && d4cOn) drawD4cOrbit(ctx, s.x + 25, s.y + 25, s.d4cAnim);
 
   // every multiple of 50 points adds an icon to the shared map; only the host (or a single
   // player) creates them, but every player tracks the level so joining the host role later
@@ -1185,11 +1208,18 @@ export function step(s, events, io) {
     }
     if (s.fireBoost > 0) {
       text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
+      hudY -= 24;
+    }
+    if (s.bulletSlow > 0) {
+      text(ctx, 'bold 18px Arial, sans-serif', `SLOW  ${(s.bulletSlow / 60).toFixed(1)}s`, [56, 189, 248], 110, hudY);
+      hudY -= 24;
     }
     const ultLocked = s.timer < ULT_MIN_TIMER;
-    const ultColor = s.d4c > 0
+    const myD4C = s.d4cBuffs.find((b) => b.id === selfId);
+    const myKiller = s.killerBuffs.find((b) => b.id === selfId);
+    const ultColor = myD4C
       ? [34, 211, 238]
-      : s.killer > 0
+      : myKiller
         ? [244, 114, 182]
         : s.slow > 0 || s.kingWindup > 0
           ? [248, 113, 113]
@@ -1202,10 +1232,10 @@ export function step(s, events, io) {
           ? `KING CRIMSON  ${(s.slow / 60).toFixed(1)}s`
           : s.kingWindup > 0
             ? `KING CRIMSON IN  ${(s.kingWindup / 60).toFixed(1)}s`
-            : s.killer > 0
-              ? `KILLER QUEEN  ${(s.killer / 60).toFixed(1)}s`
-              : s.d4c > 0
-                ? `D4C  ${(s.d4c / 60).toFixed(1)}s`
+            : myKiller
+              ? `KILLER QUEEN  ${(myKiller.frames / 60).toFixed(1)}s`
+              : myD4C
+                ? `D4C  ${(myD4C.frames / 60).toFixed(1)}s`
                 : ultLocked
                   ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
                   : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`

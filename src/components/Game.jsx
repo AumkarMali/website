@@ -363,9 +363,8 @@ const Game = ({ onClose }) => {
         stopUlt: () => audio.stopUlt(),
         isUlter: (st) => st.timeStopBy == null || (mp ? mp.isUlter(st) : true),
         isSlowUlter: (st) => (mp ? mp.isSlowUlter(st) : true),
-        isKillerUlter: (st) => (mp ? mp.isKillerUlter(st) : true),
-        isD4CUlter: (st) => (mp ? mp.isD4CUlter(st) : true),
         selfId: () => mp?.playerId() ?? null,
+        online: () => !!mp,
         ownsWorld: () => !mp || mp.isHost() || !mp.isSynced(),
         targetY: (st) => (mp ? mp.targetY(st) : st.y),
       };
