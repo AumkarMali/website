@@ -39,7 +39,7 @@ function createAudio() {
   let kingSource = null;
   // Killer Queen's line plays when its buff starts
   const killerGain = ac.createGain();
-  killerGain.gain.value = 50;
+  killerGain.gain.value = 30;
   killerGain.connect(ac.destination);
   let killerBuffer = null;
   let killerSource = null;
