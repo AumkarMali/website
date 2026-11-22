@@ -51,7 +51,7 @@ function createAudio() {
   let d4cSource = null;
   // C-Moon's summon
   const cmoonGain = ac.createGain();
-  cmoonGain.gain.value = 1;
+  cmoonGain.gain.value = 20;
   cmoonGain.connect(ac.destination);
   let cmoonBuffer = null;
   let cmoonSource = null;
