@@ -40,7 +40,7 @@ const MAX_LIVES = 3;
 // 30 s cooldown, and it can't be used in the first 10 s of the game.
 export const ULT_FRAMES = 10 * 60;
 export const ULT_WINDUP_FRAMES = 2 * 60;
-export const KING_FRAMES = 10 * 60; // King Crimson: 10 s of 25% world speed
+export const KING_FRAMES = 30 * 60; // King Crimson: 30 s of 25% world speed
 export const KING_WINDUP_FRAMES = 110; // ~1.83 s: the effect starts 1.3 s into the scream
 const KING_FX_FRAMES = 60; // ripple runs for 1 s, then the red shade takes over
 export const KILLER_FRAMES = 10 * 60; // Killer Queen: 10 s of blast-radius shots
