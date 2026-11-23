@@ -1427,7 +1427,7 @@ export function step(s, events, io) {
                     ? `ULT LOCKED  ${Math.ceil((ULT_MIN_TIMER - s.timer) / 1.2)}s`
                     : s.ultCooldown > 0 ? `ULT  ${Math.ceil(s.ultCooldown / 60)}s`
                       : s.ultType === 'silver'
-                        ? 'SILVER CHARIOT READY [T]'
+                        ? 'SC READY [T]'
                         : s.ultType === 'cmoon' ? 'C-MOON READY [T]'
                           : s.ultType === 'd4c' ? 'D4C READY [T]'
                             : s.ultType === 'killer' ? 'KILLER QUEEN READY [T]'
