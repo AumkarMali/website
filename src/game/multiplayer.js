@@ -357,7 +357,7 @@ export function connect(name, onCount) {
       const ys = [];
       if (s.cont && !avoid.has(id)) ys.push(s.y);
       for (const [gid, g] of ghosts) if (g.alive && !avoid.has(gid)) ys.push(g.ty);
-      for (const a of s.allies || []) if (!avoid.has(a.id)) ys.push(a.y + 20);
+      for (const a of s.allies || []) if (!avoid.has(a.id)) ys.push(a.y + 25);
       if (ys.length) return ys[Math.floor(Math.random() * ys.length)];
       if (avoid.has(id)) {
         let y = 30 + Math.random() * 510;

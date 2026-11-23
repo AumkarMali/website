@@ -245,6 +245,7 @@ const addBuff = (list, id, frames) => {
 };
 
 const COMBAT_ULTS = ['world', 'king', 'killer', 'd4c', 'cmoon'];
+const ALLY_ULTS = ['world', 'killer', 'd4c', 'cmoon']; // King is too complicated for the AI
 // Single-player Silver Chariot: reroll the local player's ult for 100 s.
 function beginSilverLocal(s, selfId) {
   const pool = COMBAT_ULTS.filter((t) => t !== s.baseUltType);
@@ -254,18 +255,22 @@ function beginSilverLocal(s, selfId) {
 }
 
 // Silver Chariot's AI helper: full AI block with shooting, a random ult and 3 hearts.
+const ALLY_COLORS = ['#f97316', '#22c55e', '#e879f9', '#facc15', '#38bdf8', '#f43f5e'];
+const allyColor = (id) => ALLY_COLORS[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % ALLY_COLORS.length];
 export function spawnAlly(s, owner, x, y) {
   if (s.allies.length >= 3) return;
   const id = `ally-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
   s.allies.push({
     id,
     owner,
+    color: allyColor(id),
+    score: 0,
     x: Math.max(560, Math.min(700, x)),
     y: Math.max(80, Math.min(480, y)),
     hp: 3,
-    shootCd: 20,
-    ultCd: 15 * 60,
-    ultType: COMBAT_ULTS[Math.floor(Math.random() * COMBAT_ULTS.length)],
+    shootCd: FIRE_EVERY,
+    ultCd: 0,
+    ultType: ALLY_ULTS[Math.floor(Math.random() * ALLY_ULTS.length)],
     shots: [],
     flash: 0,
   });
@@ -1372,7 +1377,9 @@ export function step(s, events, io) {
 
   // AI helpers summoned by Silver Chariot: host-simulated, shared with every player.
   if (s.allies.length && (io.ownsWorld ? io.ownsWorld() : true)) {
+    const destroyed = new Set();
     const resetBullet = (type) => {
+      destroyed.add(type);
       if (type === 'b1') {
         s.x_enemy = 0;
         respawnBullet1(s, io, rng);
@@ -1389,51 +1396,53 @@ export function step(s, events, io) {
     };
     const liveBullets = () => {
       const list = [];
-      if (s.color !== 'grey12') list.push({ type: 'b1', rect: bullet });
-      if (s.color2 !== 'grey12') list.push({ type: 'b2', rect: bullet2 });
-      if (s.color21 !== 'grey12') list.push({ type: 'b21', rect: bullet21 });
-      if (s.color3 !== 'grey12') list.push({ type: 'b3', rect: bullet3 });
+      if (s.color !== 'grey12' && s.x_enemy > 1) list.push({ type: 'b1', rect: bullet });
+      if (s.color2 !== 'grey12' && s.x_enemy2 > 1) list.push({ type: 'b2', rect: bullet2 });
+      if (s.color21 !== 'grey12' && s.x_enemy21 < WIDTH - 21) list.push({ type: 'b21', rect: bullet21 });
+      if (s.color3 !== 'grey12' && s.x_enemy3 > 1) list.push({ type: 'b3', rect: bullet3 });
       return list;
     };
     for (const a of s.allies) {
       // time stop freezes every helper except the one that stopped time
       if (stopped && s.timeStopBy !== a.id) continue;
       const slowScale = s.slow > 0 && s.slowBy !== a.id ? 0.25 : 1;
-      let targetY = a.y + 20;
+      let targetY = a.y + 25;
       let best = Infinity;
       for (const b of liveBullets()) {
         const by = b.rect.y + b.rect.h / 2;
-        const d = Math.abs(by - (a.y + 20));
+        const d = Math.abs(by - (a.y + 25));
         if (d < best) {
           best = d;
           targetY = by;
         }
       }
       const moveSpeed = slowScale * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1);
-      a.y += Math.max(-5, Math.min(5, targetY - (a.y + 20))) * moveSpeed;
+      a.y += Math.max(-5, Math.min(5, targetY - (a.y + 25))) * moveSpeed;
       a.y = Math.max(60, Math.min(500, a.y));
       a.x += Math.max(-4, Math.min(4, 680 - a.x)) * moveSpeed;
       a.x = Math.max(560, Math.min(700, a.x));
 
       if (a.shootCd > 0) a.shootCd -= slowScale;
       if (a.shootCd <= 0) {
-        a.shootCd = 20;
-        a.shots.push({ x: a.x, y: a.y + 16 });
+        a.shootCd = FIRE_EVERY;
+        a.shots.push({ x: a.x, y: a.y + 25 });
       }
       for (const shot of a.shots) shot.x -= 13 * slowScale;
       a.shots = a.shots.filter((shot) => shot.x > -30);
 
-      if (a.ultCd > 0) a.ultCd -= 1;
-      if (a.ultCd <= 0) {
-        const globalActive = s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0;
+      // same cooldown logic as a player: paused while any ult is active, then a full gap
+      const globalActive = s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0;
+      const ownUltActive =
+        (a.ultType === 'world' && s.timeStopBy === a.id && (s.ultWindup > 0 || s.timeStop > 0))
+        || (a.ultType === 'killer' && hasBuff(s.killerBuffs, a.id))
+        || (a.ultType === 'd4c' && hasBuff(s.d4cBuffs, a.id))
+        || (a.ultType === 'cmoon' && hasBuff(s.cMoonBuffs, a.id));
+      if (a.ultCd > 0 && !globalActive && !ownUltActive) a.ultCd -= 1;
+      if (a.ultCd <= 0 && !globalActive) {
         let used = true;
-        if (globalActive) used = false;
-        else if (a.ultType === 'world') {
+        if (a.ultType === 'world') {
           s.ultWindup = ULT_WINDUP_FRAMES;
           s.timeStopBy = a.id;
-        } else if (a.ultType === 'king') {
-          s.kingWindup = KING_WINDUP_FRAMES;
-          s.slowBy = a.id;
         } else if (a.ultType === 'killer') {
           addBuff(s.killerBuffs, a.id, KILLER_FRAMES);
         } else if (a.ultType === 'd4c') {
@@ -1444,11 +1453,11 @@ export function step(s, events, io) {
           used = false;
         }
         if (used) {
-          if (a.ultType === 'killer' || a.ultType === 'd4c' || a.ultType === 'cmoon') {
+          if (a.ultType !== 'world') {
             io.sfx?.(a.ultType);
             io.sendUltSound?.(a.ultType);
           }
-          a.ultCd = 15 * 60;
+          a.ultCd = a.ultType === 'd4c' ? 20 * 60 : 30 * 60;
         }
       }
 
@@ -1459,6 +1468,7 @@ export function step(s, events, io) {
           if (!collide(sr, b.rect)) continue;
           resetBullet(b.type);
           shot.dead = true;
+          a.score += 2;
           const cx = b.rect.x + b.rect.w / 2;
           const cy = b.rect.y + b.rect.h / 2;
           const blast = hasBuff(s.killerBuffs, a.id);
@@ -1481,8 +1491,9 @@ export function step(s, events, io) {
       }
       a.shots = a.shots.filter((shot) => !shot.dead);
 
-      const ar = { x: a.x, y: a.y, w: 40, h: 40 };
+      const ar = { x: a.x, y: a.y, w: 50, h: 50 };
       for (const b of liveBullets()) {
+        if (destroyed.has(b.type)) continue;
         if (!collide(ar, b.rect)) continue;
         resetBullet(b.type);
         const cx = b.rect.x + b.rect.w / 2;
@@ -1540,25 +1551,41 @@ export function step(s, events, io) {
   // D4C: pink dots orbit the protected player
   if (ctx && d4cOn) drawD4cOrbit(ctx, s.x + 25, s.y + 25, s.d4cAnim);
 
-  // AI helpers from Silver Chariot
+  // AI helpers, drawn like translucent multiplayer players
   if (ctx) {
     for (const a of s.allies) {
       ctx.save();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = a.flash > 0 ? '#e5e7eb' : '#34d399';
-      ctx.fillRect(a.x, a.y, 40, 40);
-      ctx.fillStyle = '#052e16';
-      ctx.font = 'bold 13px Arial, sans-serif';
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('AI', a.x + 20, a.y + 14);
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = a.color;
+      ctx.fillRect(a.x, a.y, 50, 50);
+      ctx.globalAlpha = 0.9;
+      ctx.font = '12px Poppins, Arial, sans-serif';
+      ctx.textBaseline = 'alphabetic';
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(String(a.hp), a.x + 20, a.y + 28);
+      ctx.fillText(`AI · ${a.score || 0}`, a.x + 25, a.y - 6);
+      ctx.globalAlpha = 1;
+      ctx.textBaseline = 'middle';
+      if (images.heart) {
+        ctx.drawImage(images.heart, a.x + 16, a.y + 7, 18, 17);
+        ctx.font = 'bold 18px Poppins, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(String(a.hp), a.x + 25, a.y + 33);
+      } else {
+        ctx.font = 'bold 20px Poppins, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(String(a.hp), a.x + 25, a.y + 25);
+      }
+      ctx.globalAlpha = 0.4;
       for (const shot of a.shots) {
-        ctx.fillStyle = '#fde047';
-        ctx.fillRect(shot.x, shot.y, 3, 9);
+        if (images.bullet) ctx.drawImage(images.bullet, Math.trunc(shot.x - 5), Math.trunc(shot.y - 1));
+        else {
+          ctx.fillStyle = a.color;
+          ctx.fillRect(shot.x, shot.y, 3, 15);
+        }
       }
       ctx.restore();
+      if (hasBuff(s.d4cBuffs, a.id)) drawD4cOrbit(ctx, a.x + 25, a.y + 25, s.d4cAnim);
     }
   }
 
@@ -1638,8 +1665,8 @@ export function step(s, events, io) {
     if (savior) {
       s.allies = s.allies.filter((a) => a.id !== savior.id);
       io.sacrificeAlly?.(savior.id);
-      spawnExplosion(s, { x: savior.x + 19, y: savior.y + 19, w: 2, h: 2 }, true);
-      io.sendBoom?.(savior.x + 20, savior.y + 20, true);
+      spawnExplosion(s, { x: savior.x + 24, y: savior.y + 24, w: 2, h: 2 }, true);
+      io.sendBoom?.(savior.x + 25, savior.y + 25, true);
       sfx('hit');
       s.lives = 1;
       s.death = 1;

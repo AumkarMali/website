@@ -420,7 +420,7 @@ const Game = ({ onClose }) => {
         solo: () => !mp || mp.playerCount() <= 1,
         buffTarget: (st, buffId) => {
           const ally = (st.allies || []).find((a) => a.id === buffId);
-          if (ally) return { x: ally.x + 20, y: ally.y + 20 };
+          if (ally) return { x: ally.x + 25, y: ally.y + 25 };
           return mp ? mp.buffTarget(st, buffId) : { x: st.x + 25, y: st.y + 25 };
         },
         isPlayerAlive: (ownerId) => (mp ? mp.isPlayerAlive(ownerId) : true),
@@ -431,7 +431,7 @@ const Game = ({ onClose }) => {
           const avoid = new Set((st.d4cBuffs || []).map((b) => b.id));
           const ys = [];
           if (!avoid.has(null)) ys.push(st.y);
-          for (const a of st.allies || []) if (!avoid.has(a.id)) ys.push(a.y + 20);
+          for (const a of st.allies || []) if (!avoid.has(a.id)) ys.push(a.y + 25);
           return ys.length ? ys[Math.floor(Math.random() * ys.length)] : st.y;
         },
       };
