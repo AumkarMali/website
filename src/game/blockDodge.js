@@ -879,8 +879,11 @@ export function step(s, events, io) {
 
   if (!frozen) {
     const speed = (s.speedBoost > 0 ? BOOST : 1) * (cMoonOn ? CMOON_BOOST : 1) * selfScale;
-    if (s.speedBoost > 0) s.speedBoost -= 1;
-    if (s.fireBoost > 0) s.fireBoost -= 1;
+    // item timers freeze while time is stopped, even for the player who stopped it
+    if (!stopped) {
+      if (s.speedBoost > 0) s.speedBoost -= 1;
+      if (s.fireBoost > 0) s.fireBoost -= 1;
+    }
     const cap = s.knock > 0 ? s.knockCap * selfScale : max_speed * speed;
     if (s.knock > 0) s.knock -= 1;
     s.x_change += s.accel_x * speed;
