@@ -26,6 +26,7 @@ const STALE_MS = 3000; // drop a ghost that has gone quiet
 const HIT_HOLD_MS = 350; // a guest keeps its own copy of a bullet it just hit, until the host's reset arrives
 const PICKUP_HOLD_MS = 3000; // a guest ignores a power-up it just took while the host removes it
 const POWERUP_EVERY = 50;
+const POWERUP_STEP = 10; // ghosts track scores per 10 pts so D4C can drop every step
 const SMOOTH = 0.25; // per-frame approach to a ghost's latest position (hides the 10 Hz steps)
 const SHOT_SPEED = 13; // matches the game: shots move 13 px per frame
 const KING_SLOW = 0.25; // King Crimson: everything but the user moves at 25%
@@ -116,7 +117,7 @@ export function connect(name, onCount) {
       const g = ghosts.get(p.id);
       const shots = (p.shots || []).map(([x, y]) => ({ x, y }));
       if (g) Object.assign(g, { name: p.name, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, baseUlt: p.baseUlt || 'world', alive: p.alive, shots, seen: now });
-      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, baseUlt: p.baseUlt || 'world', alive: p.alive, level: Math.floor((p.score || 0) / POWERUP_EVERY), shots, seen: now });
+      else ghosts.set(p.id, { name: p.name, color: colorFor(p.id), x: p.x, y: p.y, tx: p.x, ty: p.y, score: p.score, hearts: p.hearts ?? 3, baseUlt: p.baseUlt || 'world', alive: p.alive, level: Math.floor((p.score || 0) / POWERUP_STEP), shots, seen: now });
     })
     .on('broadcast', { event: 'world' }, ({ payload: p }) => {
       if (!p || p.from === id || p.from !== hostId()) return; // only the current host's world counts
@@ -198,9 +199,14 @@ export function connect(name, onCount) {
         }
       }
       for (const g of ghosts.values()) {
-        const level = Math.floor((g.score || 0) / POWERUP_EVERY);
+        const level = Math.floor((g.score || 0) / POWERUP_STEP);
         if (level > g.level) {
-          if (isHost()) for (let i = g.level; i < level; i += 1) spawnPowerup(s);
+          if (isHost()) {
+            const d4cDrop = s.d4cBuffs.length > 0;
+            for (let u = g.level + 1; u <= level; u += 1) {
+              if (d4cDrop || u % (POWERUP_EVERY / POWERUP_STEP) === 0) spawnPowerup(s);
+            }
+          }
           g.level = level;
         }
       }

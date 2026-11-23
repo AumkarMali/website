@@ -31,6 +31,7 @@ const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
 // or an extra life (up to MAX_LIVES).
 // Icons stay on the field until someone picks them up or the 50 s lifetime runs out.
 const POWERUP_EVERY = 50;
+const POWERUP_STEP = 10; // score granularity; D4C drops an icon every step instead of every 5
 const POWERUP_FRAMES = 50 * 60; // icon disappears after 50 s if nobody picks it up
 const POWERUP_SIZE = 30;
 const BOOST_FRAMES = 10 * 60;
@@ -161,7 +162,7 @@ export function createState(ultType = 'world') {
     fireTimer: 0, // frames until the next held-F shot
     kickLower: 0, // frames of lower-barrel recoil left
     kickUpper: 0, // frames of upper-barrel recoil left
-    powerupLevel: 0, // multiples of POWERUP_EVERY already rewarded
+    powerupLevel: 0, // last 10-point score step already processed for drops
     powerups: [], // { id, x, y, ttl, type } icons lying on the map
     explosions: [], // { x, y, ttl } yellow bursts when a shot destroys an enemy bullet
     timeStop: 0, // frames of stopped time left (ultimate)
@@ -1371,15 +1372,18 @@ export function step(s, events, io) {
   // D4C: pink dots orbit the protected player
   if (ctx && d4cOn) drawD4cOrbit(ctx, s.x + 25, s.y + 25, s.d4cAnim);
 
-  // every multiple of 50 points adds an icon to the shared map; only the host (or a single
-  // player) creates them, but every player tracks the level so joining the host role later
-  // doesn't drop a backlog of icons
-  const level = Math.floor(s.score / POWERUP_EVERY);
-  if (level > s.powerupLevel) {
-    const earned = level - s.powerupLevel;
-    s.powerupLevel = level;
+  // every 50 points adds an icon to the shared map; while any D4C is active it drops every
+  // 10 points instead. Only the host (or a single player) creates them, but every player
+  // tracks the score step so a host switch doesn't drop a backlog of icons.
+  const unit = Math.floor(s.score / POWERUP_STEP);
+  if (unit > s.powerupLevel) {
+    const from = s.powerupLevel + 1;
+    s.powerupLevel = unit;
     if (s.cont && (io.ownsWorld ? io.ownsWorld() : true)) {
-      for (let i = 0; i < earned; i += 1) spawnPowerup(s);
+      const d4cDrop = s.d4cBuffs.length > 0;
+      for (let u = from; u <= unit; u += 1) {
+        if (d4cDrop || u % (POWERUP_EVERY / POWERUP_STEP) === 0) spawnPowerup(s);
+      }
     }
   }
   if (ctx && s.cont) {
