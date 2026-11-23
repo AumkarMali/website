@@ -242,6 +242,17 @@ const addBuff = (list, id, frames) => {
 };
 
 const ALLY_ULTS = ['world', 'killer', 'd4c', 'cmoon']; // King is too complicated for the AI
+// Each helper plays one of three plans and re-rolls it every 8-16 s:
+//   defense - escort a player and shoot whatever is flying at them
+//   attack  - roam the middle and clear enemy bullets
+//   grab    - run down the power-up icons lying on the map
+const ALLY_STRATEGIES = ['defense', 'attack', 'grab'];
+const allyStrategyFrames = () => 8 * 60 + Math.floor(Math.random() * 8 * 60);
+const rollStrategy = (a, io) => {
+  a.strategy = ALLY_STRATEGIES[Math.floor(Math.random() * ALLY_STRATEGIES.length)];
+  a.strategyTtl = allyStrategyFrames();
+  a.guardId = a.strategy === 'defense' ? (io?.randomPlayerId?.() ?? a.owner ?? null) : null;
+};
 // Silver Chariot: summon an AI helper next to the player. 30 s cooldown, max 3 helpers.
 function beginSilverLocal(s, selfId) {
   spawnAlly(s, selfId, s.x, s.y);
@@ -270,6 +281,11 @@ export function spawnAlly(s, owner, x, y) {
     dodgeTargetX: null, // slide to this x while dodging (left for rear bullets, right for front)
     dodgeTargetY: null, // and to this block-center y, just enough to clear the lane
     dodgeType: null,
+    strategy: ALLY_STRATEGIES[Math.floor(Math.random() * ALLY_STRATEGIES.length)],
+    strategyTtl: allyStrategyFrames(),
+    guardId: owner ?? null, // player escorted by the defense plan
+    speedBoost: 0,
+    fireBoost: 0,
     dodgeFromRight: false,
     dodgeY: null,
     x_change: 0,
@@ -359,6 +375,13 @@ function respawnBullet1(s, io, rng) {
   if (ty <= 60) s.rand += 30;
 }
 
+// The sniper rolls a fresh target every time it respawns, not only when it reaches the far
+// wall: reusing the old lane made it hammer the same player until they moved out of it.
+function respawnBullet3(s, io) {
+  s.x_warn = aimY(s, io);
+  s.rand3 = s.x_warn + 11;
+}
+
 // Host side: another player was hit by, or shot down, this bullet. Reset it for everyone.
 // During a time stop the bullet is parked off-screen instead, so no new enemy bullet appears
 // until time resumes.
@@ -382,7 +405,7 @@ export function applyRemoteHit(s, bullet, io) {
     }
   } else if (bullet === 'b3') {
     s.x_enemy3 = stopped ? -60 : 0;
-    if (!stopped) s.rand3 = s.x_warn + 11;
+    if (!stopped) respawnBullet3(s, io);
   }
 }
 
@@ -556,19 +579,6 @@ export function drawD4cOrbit(ctx, cx, cy, t) {
     ctx.fill();
   }
   ctx.restore();
-}
-
-// Silver Chariot, solo: swap your hearts with your AI helper's.
-function swapAllyLives(s, io) {
-  if (!s.cont || s.baseUltType !== 'silver' || !io.solo?.()) return;
-  const ally = s.allies.find((a) => a.hp > 0);
-  if (!ally) return;
-  const hearts = Math.max(0, Math.min(MAX_LIVES, Math.trunc(pyRound(s.lives))));
-  const hp = Math.max(0, Math.min(MAX_LIVES, ally.hp));
-  s.lives = hp;
-  ally.hp = hearts;
-  if (ally.hp <= 0) s.allies = s.allies.filter((a) => a.id !== ally.id);
-  io.sfx?.('bounce');
 }
 
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
@@ -757,7 +767,6 @@ export function step(s, events, io) {
           tryUlt(s, io, frozenNow);
         }
       }
-      if (event.key === 'h' && !frozenNow) swapAllyLives(s, io);
       if (event.key === 'f') {
         s.fHeld = true;
         if (!frozenNow && !aiControlledNow) fire(s, sfx);
@@ -1062,8 +1071,8 @@ export function step(s, events, io) {
         s.x_enemy21 = 780;
         s.rand21 = rng.randint(30, 540);
       } else {
-        s.rand3 = s.x_warn + 11;
         s.x_enemy3 = 0;
+        respawnBullet3(s, io);
       }
     }
   };
@@ -1221,8 +1230,7 @@ export function step(s, events, io) {
 
       if (collide(bullet3, wall2)) {
         s.x_enemy3 = 0;
-        s.x_warn = aimY(s, io);
-        s.rand3 = s.x_warn + 11;
+        respawnBullet3(s, io);
         s.color3 = 'red';
         s.color4 = 'red';
         s.score += 1;
@@ -1232,13 +1240,13 @@ export function step(s, events, io) {
       if (cMoonOn) {
         io.report?.('b3');
         s.x_enemy3 = 0;
-        s.rand3 = s.x_warn + 11;
+        respawnBullet3(s, io);
         sfx('hit');
         spawnExplosion(s, bullet3);
       } else if (!cMoonActive) {
         io.report?.('b3');
         s.x_enemy3 = 0;
-        s.rand3 = s.x_warn + 11;
+        respawnBullet3(s, io);
         s.x_change += 40;
         knock(s, max_speed);
         s.lives -= 1;
@@ -1248,8 +1256,8 @@ export function step(s, events, io) {
     }
       if (shotHits(bullet3)) {
         io.report?.('b3');
-        s.rand3 = s.x_warn + 11;
         s.x_enemy3 = 0;
+        respawnBullet3(s, io);
         sfx('hit');
         shotExplosion(bullet3, 'b3');
       }
@@ -1385,7 +1393,7 @@ export function step(s, events, io) {
         if (!stopped) s.rand21 = rng.randint(30, 540);
       } else {
         s.x_enemy3 = stopped ? -60 : 0;
-        if (!stopped) s.rand3 = s.x_warn + 11;
+        if (!stopped) respawnBullet3(s, io);
       }
     };
     const liveBullets = () => {
@@ -1426,12 +1434,26 @@ export function step(s, events, io) {
         vy: stopped ? 0 : s.gv3y || 0,
       });
     }
-    for (const a of s.allies) {
+    // Helpers rotate through fixed slots and claim a bullet each, so they spread out
+    // instead of all converging on the same spot.
+    const claimed = new Set();
+    const claimedLoot = new Set();
+    for (let slot = 0; slot < s.allies.length; slot += 1) {
+      const a = s.allies[slot];
+      const spread = (slot - (s.allies.length - 1) / 2) * 85;
       // time stop freezes every helper except the one that stopped time
       const ownTimeStop = stopped && s.timeStopBy === a.id;
       if (stopped && !ownTimeStop) continue;
       const slowScale = s.slow > 0 && s.slowBy !== a.id ? 0.25 : 1;
-      const moveSpeed = slowScale * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1);
+      if (!stopped) {
+        if (a.speedBoost > 0) a.speedBoost -= 1;
+        if (a.fireBoost > 0) a.fireBoost -= 1;
+        a.strategyTtl = (a.strategyTtl || 0) - 1;
+        if (a.strategyTtl <= 0 || !a.strategy) rollStrategy(a, io);
+      }
+      const moveSpeed = slowScale
+        * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1)
+        * (a.speedBoost > 0 ? BOOST : 1);
       const aiCap = max_speed * moveSpeed;
       const cx = a.x + 25;
       const cy = a.y + 25;
@@ -1441,6 +1463,8 @@ export function step(s, events, io) {
       let aimLower = null;
       let dodging = false;
       let strafeTargetX = null;
+      let homeX = 630 + spread * 0.35; // where this plan wants the helper to idle
+      let homeY = null;
 
       if (ownTimeStop) {
         a.dodgeTtl = 0;
@@ -1515,19 +1539,56 @@ export function step(s, events, io) {
           moveX = a.x < 720 ? 1 : 0;
           a.dodgeTtl = Math.max(a.dodgeTtl || 0, 80);
         } else {
-          // Otherwise line a barrel up with a bullet in front and shoot it.
+          // Nothing to dodge: follow this helper's plan.
+          let guard = null;
+          if (a.strategy === 'defense') {
+            guard = (a.guardId != null && io.buffTarget ? io.buffTarget(s, a.guardId) : null)
+              || { x: s.x + 25, y: s.y + 25 };
+            // sit between them and the stream, each defender in its own slot
+            homeX = Math.max(150, Math.min(720, guard.x - 90 + spread * 0.7));
+          }
+          let loot = null;
+          if (a.strategy === 'grab') {
+            // one icon per helper, so grabbers fan out instead of racing the same drop
+            for (const p of s.powerups) {
+              if (p.ttl <= 0 || claimedLoot.has(p.id)) continue;
+              const px = p.x + POWERUP_SIZE / 2;
+              const py = p.y + POWERUP_SIZE / 2;
+              const d = Math.hypot(px - cx, py - cy);
+              if (!loot || d < loot.d) loot = { x: px, y: py, d, id: p.id };
+            }
+            if (loot) claimedLoot.add(loot.id);
+          }
+          // Shoot the bullet nearest our barrels, or nearest the player we escort.
+          // A bullet another helper already called is only a fallback, so they split up.
           let best = null;
+          let taken = null;
           for (const b of sensed) {
             const bx = b.x + b.w / 2;
             if (bx >= a.x + 5) continue; // behind: leave it to the dodge
             const by = b.y + b.h / 2;
-            const d = Math.abs(by - cy);
-            if (!best || d < best.d) best = { by, d };
+            const d = guard ? Math.abs(by - guard.y) : Math.abs(by - cy);
+            if (claimed.has(b.type)) {
+              if (!taken || d < taken.d) taken = { by, d, type: b.type };
+            } else if (!best || d < best.d) {
+              best = { by, d, type: b.type };
+            }
           }
-          if (best) aimAt = best;
-          // Back away from an approaching front bullet while still shooting.
-          if (front && front.t < 55) strafeTargetX = 700;
-          else moveX = a.x > 660 ? -1 : a.x < 600 ? 1 : 0;
+          if (!best) best = taken;
+          if (loot) {
+            // Loot run: go get it, and ignore shooting until it is picked up.
+            strafeTargetX = Math.max(10, Math.min(740, loot.x - 25));
+            homeY = loot.y;
+          } else {
+            if (best) {
+              aimAt = best;
+              claimed.add(best.type);
+            } else if (guard) {
+              homeY = Math.max(62, Math.min(570, guard.y + spread)); // idle near their lane
+            }
+            // Back away from an approaching front bullet while still shooting.
+            if (front && front.t < 55) strafeTargetX = Math.max(homeX, 700);
+          }
         }
       }
 
@@ -1580,14 +1641,34 @@ export function step(s, events, io) {
         targetVy = approach(a.dodgeTargetY - cy, a.y_change, 5.5);
       } else if (moveY !== 0) {
         targetVy = moveY * 5.5;
+      } else if (homeY != null) {
+        targetVy = approach(homeY - cy, a.y_change, 4.5);
       } else {
-        targetVy = approach(300 - a.y, a.y_change, 2.5);
+        targetVy = approach(300 + spread - cy, a.y_change, 2.5);
       }
       let targetVx;
       if (dodging && a.dodgeTargetX != null) targetVx = approach(a.dodgeTargetX - a.x, a.x_change, 6);
       else if (strafeTargetX != null) targetVx = approach(strafeTargetX - a.x, a.x_change, 4.5);
       else if (moveX !== 0) targetVx = moveX * 4.5;
-      else targetVx = approach(630 - a.x, a.x_change, 2.5);
+      else targetVx = approach(homeX - a.x, a.x_change, 3);
+
+      // Never share a square with another helper: push apart when they get close.
+      for (let o = 0; o < s.allies.length; o += 1) {
+        if (o === slot) continue;
+        const other = s.allies[o];
+        const dx = cx - (other.x + 25);
+        const dy = cy - (other.y + 25);
+        if (Math.abs(dx) > 62 || Math.abs(dy) > 62) continue;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const push = ((62 - dist) / 62) * 5;
+        // perfectly stacked: the lower slot goes up, the higher one goes down
+        const ux = dist < 1 ? (o > slot ? -1 : 1) : dx / dist;
+        const uy = dist < 1 ? (o > slot ? -1 : 1) : dy / dist;
+        targetVx += ux * push;
+        targetVy += uy * push;
+      }
+      targetVx = Math.max(-aiCap, Math.min(aiCap, targetVx));
+      targetVy = Math.max(-aiCap, Math.min(aiCap, targetVy));
       const steer = (target, current) => {
         const delta = target - current;
         if (delta > 0.1) return 1;
@@ -1614,7 +1695,7 @@ export function step(s, events, io) {
       const aligned = aimAt && aimLower != null
         && Math.abs((a.y + (aimLower ? 50 : -15)) - aimAt.by) <= 18;
       const canShoot = sensed.some((b) => b.x + b.w < a.x + 10);
-      if (a.shootCd > 0) a.shootCd -= slowScale;
+      if (a.shootCd > 0) a.shootCd -= slowScale * (a.fireBoost > 0 ? BOOST : 1);
       if (a.shootCd <= 0 && canShoot && (!aimAt || aligned)) {
         const lower = a.nextLower;
         a.shots.push({
@@ -1690,6 +1771,23 @@ export function step(s, events, io) {
       a.shots = a.shots.filter((shot) => !shot.dead);
 
       const ar = { x: a.x, y: a.y, w: 50, h: 50 };
+      // Power-ups the helper walked over: the same four pickups a player gets.
+      if (!stopped && s.powerups.length) {
+        const leftForPlayers = [];
+        for (const p of s.powerups) {
+          if (p.ttl > 0 && collide(ar, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
+            if (p.type === 'speed') a.speedBoost = BOOST_FRAMES;
+            else if (p.type === 'fire') a.fireBoost = BOOST_FRAMES;
+            else if (p.type === 'slow') s.bulletSlow = Math.max(s.bulletSlow, SLOW_FRAMES);
+            else a.hp = Math.min(MAX_LIVES, a.hp + 1);
+            io.reportPickup?.(p.id);
+            sfx('bounce');
+            continue;
+          }
+          leftForPlayers.push(p);
+        }
+        s.powerups = leftForPlayers;
+      }
       for (const b of liveBullets()) {
         if (destroyed.has(b.type)) continue;
         if (!collide(ar, b.rect)) continue;
@@ -1705,6 +1803,38 @@ export function step(s, events, io) {
         if (a.hp <= 0) break;
       }
       if (a.flash > 0) a.flash -= 1;
+    }
+    // Last word on stacking: separate any pair that still overlaps after everyone moved.
+    // A time stop only lets its own caster move, so that one takes the whole push.
+    const canShove = (a) => !stopped || s.timeStopBy === a.id;
+    for (let pass = 0; pass < 3; pass += 1) {
+      let hit = false;
+      for (let i = 0; i < s.allies.length; i += 1) {
+        for (let j = i + 1; j < s.allies.length; j += 1) {
+          const A = s.allies[i];
+          const B = s.allies[j];
+          const dx = A.x - B.x;
+          const dy = A.y - B.y;
+          const ox = 54 - Math.abs(dx);
+          const oy = 54 - Math.abs(dy);
+          if (ox <= 0 || oy <= 0) continue;
+          const moveA = canShove(A);
+          const moveB = canShove(B);
+          if (!moveA && !moveB) continue;
+          hit = true;
+          const share = moveA && moveB ? 0.5 : 1;
+          if (ox < oy) {
+            const push = (dx === 0 ? 1 : Math.sign(dx)) * ox * share;
+            if (moveA) A.x = Math.max(2, Math.min(749, A.x + push));
+            if (moveB) B.x = Math.max(2, Math.min(749, B.x - push));
+          } else {
+            const push = (dy === 0 ? 1 : Math.sign(dy)) * oy * share;
+            if (moveA) A.y = Math.max(37, Math.min(545, A.y + push));
+            if (moveB) B.y = Math.max(37, Math.min(545, B.y - push));
+          }
+        }
+      }
+      if (!hit) break;
     }
     s.allies = s.allies.filter((a) => a.hp > 0);
   }
@@ -1857,17 +1987,20 @@ export function step(s, events, io) {
   s.death = Math.trunc(pyRound(s.lives));
 
   if (s.death <= 0) {
-    // A living AI helper takes the death instead: the helper dies, you keep one life.
-    const savior = !s.remoteKO
-      && s.allies.find((a) => (io.isPlayerAlive ? io.isPlayerAlive(a.owner) : true));
+    // An AI helper hands over every heart it has left; the healthiest one steps up and dies.
+    let savior = null;
+    if (!s.remoteKO) {
+      for (const a of s.allies) if (a.hp > 0 && (!savior || a.hp > savior.hp)) savior = a;
+    }
     if (savior) {
+      const given = Math.max(1, Math.min(MAX_LIVES, savior.hp));
       s.allies = s.allies.filter((a) => a.id !== savior.id);
       io.sacrificeAlly?.(savior.id);
       spawnExplosion(s, { x: savior.x + 24, y: savior.y + 24, w: 2, h: 2 }, true);
       io.sendBoom?.(savior.x + 25, savior.y + 25, true);
       sfx('hit');
-      s.lives = 1;
-      s.death = 1;
+      s.lives = given;
+      s.death = given;
       s.cont = true;
     } else {
       s.cont = false;

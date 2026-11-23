@@ -15,7 +15,7 @@ const MAX_CHANNELS = 8; // pygame.mixer default; Sound.play() is silent when all
 // fire.mp3 is 1.9 s: 0.27 s of silence, the bang, then a long tail. Rapid fire plays only
 // the bang, outside the channel pool, so shots are instant and don't pile up.
 const FIRE_CLIP = { offset: 0.26, length: 0.18, fade: 0.05 };
-const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', KeyF: 'f', KeyT: 't', KeyH: 'h' };
+const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', KeyF: 'f', KeyT: 't' };
 
 function createAudio() {
   const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -417,7 +417,7 @@ const Game = ({ onClose }) => {
         isSlowUlter: (st) => (mp ? mp.isSlowUlter(st) : true),
         selfId: () => mp?.playerId() ?? null,
         online: () => !!mp,
-        solo: () => !mp || mp.playerCount() <= 1,
+        randomPlayerId: () => mp?.randomPlayerId() ?? null,
         buffTarget: (st, buffId) => {
           const ally = (st.allies || []).find((a) => a.id === buffId);
           if (ally) return { x: ally.x + 25, y: ally.y + 25 };
@@ -602,13 +602,12 @@ const Game = ({ onClose }) => {
           <div className="flex flex-col items-center gap-2">
             <PadButton k="f" onPress={press} onRelease={release} className="h-20 w-20 rounded-full text-2xl font-bold">F</PadButton>
             <PadButton k="t" onPress={press} onRelease={release} className="h-12 w-12 rounded-full text-sm font-bold">T</PadButton>
-            <PadButton k="h" onPress={press} onRelease={release} className="h-12 w-12 rounded-full text-sm font-bold">H</PadButton>
           </div>
         </div>
       ) : (
         <p className="text-center text-sm text-white/60">
           Press <kbd className="kbd">← ↑ ↓ →</kbd> to move around · press <kbd className="kbd">F</kbd> to fire, hold it to rapid-fire ·{' '}
-          <kbd className="kbd">T</kbd> to use your ultimate · <kbd className="kbd">H</kbd> to swap hearts with your AI helper (solo) · <kbd className="kbd">Esc</kbd> to close
+          <kbd className="kbd">T</kbd> to use your ultimate · <kbd className="kbd">Esc</kbd> to close
         </p>
       ))}
     </motion.div>,

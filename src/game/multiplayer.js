@@ -357,6 +357,12 @@ export function connect(name, onCount) {
       return s.y;
     },
 
+    randomPlayerId() {
+      const ids = alive ? [id] : [];
+      for (const [gid, g] of ghosts) if (g.alive) ids.push(gid);
+      return ids.length ? ids[Math.floor(Math.random() * ids.length)] : id;
+    },
+
     isPlayerAlive(pid) {
       if (pid === id) return alive;
       return !!ghosts.get(pid)?.alive;
