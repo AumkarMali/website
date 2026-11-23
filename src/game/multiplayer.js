@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, spawnAlly, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SILVER_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, spawnAlly, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -97,18 +97,9 @@ export function connect(name, onCount) {
   };
   const isHost = () => synced && alive && hostId() === id;
 
-  // Silver Chariot: give every player a random combat ult different from their pick.
-  const COMBAT_ULTS = ['world', 'king', 'killer', 'd4c', 'cmoon'];
+  // Silver Chariot: spawn one AI helper next to the activator (max 3).
   const beginSilver = (s, activatorId) => {
-    const pick = (base) => {
-      const pool = COMBAT_ULTS.filter((t) => t !== base);
-      return pool[Math.floor(Math.random() * pool.length)];
-    };
-    const types = {};
-    types[id] = pick(s.baseUltType);
-    for (const [gid, g] of ghosts) types[gid] = pick(g.baseUlt || 'world');
-    s.silver = SILVER_FRAMES;
-    s.silverTypes = types;
+    if ((s.allies || []).length >= 3) return;
     const g = activatorId === id ? null : ghosts.get(activatorId);
     spawnAlly(s, activatorId, activatorId === id ? s.x : (g?.x ?? 400), activatorId === id ? s.y : (g?.y ?? 220));
   };
@@ -182,7 +173,7 @@ export function connect(name, onCount) {
         for (const req of ultRequests.splice(0)) {
           if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
           if (req.type === 'silver') {
-            if (s.silver === 0) beginSilver(s, req.id);
+            if ((s.allies || []).length < 3) beginSilver(s, req.id);
           } else if (req.type === 'cmoon') {
             addBuff(s.cMoonBuffs, req.id, CMOON_FRAMES);
           } else if (req.type === 'd4c') {
@@ -302,7 +293,6 @@ export function connect(name, onCount) {
       if (isHost()) {
         if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
         if (type === 'silver') {
-          if (s.silver > 0) return true;
           beginSilver(s, id);
         } else if (type === 'cmoon') {
           addBuff(s.cMoonBuffs, id, CMOON_FRAMES);

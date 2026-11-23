@@ -581,7 +581,7 @@ const Game = ({ onClose }) => {
               >
                 <span className="block text-base font-bold text-slate-100">Silver Chariot</span>
                 <span className="mt-2 block text-sm text-white/60">
-                  For 100 seconds every player's ultimate is randomly swapped to a different one (just yours in single-player).
+                  Summon an AI ally with full player abilities. 30-second cooldown, up to 3 helpers.
                 </span>
               </button>
             </div>

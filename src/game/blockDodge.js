@@ -56,7 +56,6 @@ export const CMOON_FRAMES = 10 * 60; // C-Moon: 10 s of bullet gravity + absorpt
 const CMOON_ACCEL = 0.16; // px/frame^2 enemy bullets accelerate toward a C-Moon user
 const CMOON_MAX_SPEED = 6; // cap on the gravity velocity so they don't orbit wildly
 const CMOON_BOOST = 1.25; // C-Moon users move 25% faster while the buff is active
-export const SILVER_FRAMES = 100 * 60; // Silver Chariot: 100 s of swapped ults
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
 const ULT_AUDIO_FRAMES = 307; // the clip is ~5.1 s
@@ -114,7 +113,7 @@ export function createState(ultType = 'world') {
   return {
     player_color: [0, 120, 250],
     ultType, // 'world' (time stop) or 'king' (slowed random future)
-    baseUltType: ultType, // the picked ult, restored after a Silver Chariot swap
+    baseUltType: ultType, // the picked ult (kept for ghost display / identity)
     score: 0,
     lives: 3,
     x: 400,
@@ -178,8 +177,6 @@ export function createState(ultType = 'world') {
     killerBuffs: [], // [{ id, frames }] players with Killer Queen's blast shots active
     d4cBuffs: [], // [{ id, frames }] players protected by D4C
     cMoonBuffs: [], // [{ id, frames }] players pulling and absorbing bullets with C-Moon
-    silver: 0, // frames left of the Silver Chariot ult swap
-    silverTypes: {}, // { playerId: ultType } temporary assignments
     allies: [], // AI helpers summoned by Silver Chariot (host-simulated, shared)
     gv1x: 0, gv1y: 0, // C-Moon gravity velocity added to each enemy bullet
     gv2x: 0, gv2y: 0,
@@ -224,7 +221,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
-  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow', 'silver', 'silverTypes', 'allies',
+  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow', 'allies',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -244,13 +241,9 @@ const addBuff = (list, id, frames) => {
   if (!hasBuff(list, id)) list.push({ id, frames });
 };
 
-const COMBAT_ULTS = ['world', 'king', 'killer', 'd4c', 'cmoon'];
 const ALLY_ULTS = ['world', 'killer', 'd4c', 'cmoon']; // King is too complicated for the AI
-// Single-player Silver Chariot: reroll the local player's ult for 100 s.
+// Silver Chariot: summon an AI helper next to the player. 30 s cooldown, max 3 helpers.
 function beginSilverLocal(s, selfId) {
-  const pool = COMBAT_ULTS.filter((t) => t !== s.baseUltType);
-  s.silver = SILVER_FRAMES;
-  s.silverTypes = { [selfId]: pool[Math.floor(Math.random() * pool.length)] };
   spawnAlly(s, selfId, s.x, s.y);
 }
 
@@ -274,6 +267,11 @@ export function spawnAlly(s, owner, x, y) {
     aimTargetY: null,
     dodgeTtl: 0, // keep dodging after the bullet leaves the lane so we don't re-enter early
     dodgeDir: 0,
+    dodgeTargetX: null, // slide to this x while dodging (left for rear bullets, right for front)
+    dodgeTargetY: null, // and to this block-center y, just enough to clear the lane
+    dodgeType: null,
+    dodgeFromRight: false,
+    dodgeY: null,
     x_change: 0,
     y_change: 0,
     accel_x: 0,
@@ -460,9 +458,9 @@ function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
   if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
-  // Silver Chariot: swap every player's ult. Single-player rerolls only yourself.
+  // Silver Chariot: summon an AI helper (30 s cooldown). No effect on other ults.
   if (s.ultType === 'silver') {
-    if (s.silver > 0) return;
+    if (s.allies.length >= 3) return;
     s.ultCooldown = ULT_COOLDOWN;
     io.sfx?.('silver');
     if (io.online?.()) {
@@ -734,15 +732,6 @@ export function step(s, events, io) {
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
   const selfId = io.selfId?.() ?? null;
-  // Silver Chariot: adopt the shared temporary ult while the swap is active.
-  if (s.silver > 0) {
-    const next = s.silverTypes?.[selfId] || s.baseUltType;
-    if (next !== s.ultType) s.ultCooldown = 0;
-    s.ultType = next;
-  } else if (s.ultType !== s.baseUltType) {
-    s.ultCooldown = 0;
-    s.ultType = s.baseUltType;
-  }
   const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
@@ -811,10 +800,6 @@ export function step(s, events, io) {
       s.d4cBuffs = s.d4cBuffs.filter((b) => b.frames > 0);
       s.cMoonBuffs = s.cMoonBuffs.filter((b) => b.frames > 0);
       if (s.bulletSlow > 0) s.bulletSlow -= 1;
-    }
-    if (s.silver > 0) {
-      s.silver -= 1;
-      if (s.silver === 0) s.silverTypes = {};
     }
   }
 
@@ -1454,10 +1439,16 @@ export function step(s, events, io) {
       let moveY = 0;
       let aimAt = null;
       let aimLower = null;
+      let dodging = false;
+      let strafeTargetX = null;
 
       if (ownTimeStop) {
         a.dodgeTtl = 0;
         a.dodgeDir = 0;
+        a.dodgeTargetX = null;
+        a.dodgeTargetY = null;
+        a.dodgeType = null;
+        a.dodgeY = null;
         // Frozen bullets: clear the one closest to the helper's owner, not just the nearest to us.
         const guard = a.owner && io.buffTarget ? io.buffTarget(s, a.owner) : null;
         const guardY = guard ? guard.y : s.y + 25;
@@ -1482,22 +1473,47 @@ export function step(s, events, io) {
           const py = by + b.vy * t;
           if (py < cy - 34 || py > cy + 34) continue; // it passes above/below
           if (bx > cx + 8) {
-            if (!behind || t < behind.t) behind = { by, t };
+            if (!behind || t < behind.t) behind = { by, t, type: b.type };
           } else if (!front || t < front.t) {
-            front = { by, t };
+            front = { by, t, type: b.type };
           }
         }
-        // Yellow bullets behind (b21) cannot be shot: step out of their lane early.
+        // Yellow bullets behind (b21) cannot be shot: slide left with them and step
+        // out of their lane (gain horizontal time, then dodge vertically).
         if (behind && behind.t < 60) {
-          moveY = behind.by > cy ? -1 : 1;
-          moveX = a.x > 680 ? -1 : a.x < 560 ? 1 : 0;
-          a.dodgeDir = moveY;
-          a.dodgeTtl = Math.max(a.dodgeTtl || 0, 60);
+          if (!a.dodgeFromRight || a.dodgeType !== behind.type || a.dodgeY == null || Math.abs(a.dodgeY - behind.by) > 30) {
+            const dir = behind.by > cy ? -1 : 1; // bullet below -> step up, and vice versa
+            const away = behind.by + dir * 50;
+            a.dodgeDir = dir;
+            a.dodgeTargetX = Math.min(a.x, 540);
+            a.dodgeTargetY = dir > 0
+              ? Math.max(cy + 10, away)
+              : Math.min(cy - 10, away);
+            a.dodgeTargetY = Math.max(62, Math.min(570, a.dodgeTargetY));
+            a.dodgeType = behind.type;
+            a.dodgeFromRight = true;
+            a.dodgeY = behind.by;
+          }
+          moveY = a.dodgeDir;
+          moveX = a.x > 540 ? -1 : 0;
+          a.dodgeTtl = Math.max(a.dodgeTtl || 0, 100);
         } else if (front && front.t < 28) {
-          moveY = front.by > cy ? -1 : 1;
-          moveX = a.x > 680 ? -1 : a.x < 560 ? 1 : 0;
-          a.dodgeDir = moveY;
-          a.dodgeTtl = Math.max(a.dodgeTtl || 0, 45);
+          if (a.dodgeFromRight || a.dodgeType !== front.type || a.dodgeY == null || Math.abs(a.dodgeY - front.by) > 30) {
+            const dir = front.by > cy ? -1 : 1;
+            const away = front.by + dir * 50;
+            a.dodgeDir = dir;
+            a.dodgeTargetX = Math.max(a.x, 720);
+            a.dodgeTargetY = dir > 0
+              ? Math.max(cy + 10, away)
+              : Math.min(cy - 10, away);
+            a.dodgeTargetY = Math.max(62, Math.min(570, a.dodgeTargetY));
+            a.dodgeType = front.type;
+            a.dodgeFromRight = false;
+            a.dodgeY = front.by;
+          }
+          moveY = a.dodgeDir;
+          moveX = a.x < 720 ? 1 : 0;
+          a.dodgeTtl = Math.max(a.dodgeTtl || 0, 80);
         } else {
           // Otherwise line a barrel up with a bullet in front and shoot it.
           let best = null;
@@ -1509,7 +1525,9 @@ export function step(s, events, io) {
             if (!best || d < best.d) best = { by, d };
           }
           if (best) aimAt = best;
-          moveX = a.x > 660 ? -1 : a.x < 600 ? 1 : 0;
+          // Back away from an approaching front bullet while still shooting.
+          if (front && front.t < 55) strafeTargetX = 700;
+          else moveX = a.x > 660 ? -1 : a.x < 600 ? 1 : 0;
         }
       }
 
@@ -1530,10 +1548,19 @@ export function step(s, events, io) {
       }
       // Stay out of the lane until the bullet has fully passed us.
       if ((a.dodgeTtl || 0) > 0) {
-        a.dodgeTtl -= 1;
-        moveY = a.dodgeDir;
-        aimAt = null;
-        aimLower = null;
+        const db = sensed.find((b) => b.type === a.dodgeType);
+        const passed = !db || (a.dodgeFromRight ? db.x + db.w <= a.x + 4 : db.x >= a.x + 46);
+        if (passed) {
+          a.dodgeTtl = 0;
+          a.dodgeType = null;
+          a.dodgeY = null;
+        } else {
+          a.dodgeTtl -= 1;
+          moveY = a.dodgeDir;
+          dodging = true;
+          aimAt = null;
+          aimLower = null;
+        }
       }
       if (moveY < 0 && a.y < 45) moveY = 1;
       else if (moveY > 0 && a.y > 540) moveY = -1;
@@ -1549,14 +1576,18 @@ export function step(s, events, io) {
       if (aimAt) {
         const desiredY = aimAt.by - (aimLower ? 50 : -15);
         targetVy = approach(desiredY - a.y, a.y_change, 4.5);
+      } else if (dodging && a.dodgeTargetY != null) {
+        targetVy = approach(a.dodgeTargetY - cy, a.y_change, 5.5);
       } else if (moveY !== 0) {
         targetVy = moveY * 5.5;
       } else {
         targetVy = approach(300 - a.y, a.y_change, 2.5);
       }
-      const targetVx = moveX !== 0
-        ? moveX * 3
-        : approach(630 - a.x, a.x_change, 2.5);
+      let targetVx;
+      if (dodging && a.dodgeTargetX != null) targetVx = approach(a.dodgeTargetX - a.x, a.x_change, 6);
+      else if (strafeTargetX != null) targetVx = approach(strafeTargetX - a.x, a.x_change, 4.5);
+      else if (moveX !== 0) targetVx = moveX * 4.5;
+      else targetVx = approach(630 - a.x, a.x_change, 2.5);
       const steer = (target, current) => {
         const delta = target - current;
         if (delta > 0.1) return 1;
