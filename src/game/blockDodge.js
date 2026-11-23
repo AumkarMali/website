@@ -55,6 +55,8 @@ const D4C_COOLDOWN = 20 * 60; // D4C's reuse gap is 20 s instead of the usual 30
 export const CMOON_FRAMES = 10 * 60; // C-Moon: 10 s of bullet gravity + absorption
 const CMOON_ACCEL = 0.16; // px/frame^2 enemy bullets accelerate toward a C-Moon user
 const CMOON_MAX_SPEED = 6; // cap on the gravity velocity so they don't orbit wildly
+const CMOON_BOOST_FRAMES = 5 * 60; // after C-Moon ends, everyone gets a short speed boost
+const CMOON_BOOST = 1.25; // 25% faster movement
 export const SILVER_FRAMES = 100 * 60; // Silver Chariot: 100 s of swapped ults
 export const ULT_MIN_TIMER = 12; // s.timer gains 1.2 per second, so 12 ≈ 10 s of play
 const SLOW = 0.25; // everything but the King Crimson user runs at 25% speed
@@ -178,6 +180,7 @@ export function createState(ultType = 'world') {
     killerBuffs: [], // [{ id, frames }] players with Killer Queen's blast shots active
     d4cBuffs: [], // [{ id, frames }] players protected by D4C
     cMoonBuffs: [], // [{ id, frames }] players pulling and absorbing bullets with C-Moon
+    cMoonBoost: 0, // frames of the post-C-Moon +25% speed boost
     silver: 0, // frames left of the Silver Chariot ult swap
     silverTypes: {}, // { playerId: ultType } temporary assignments
     gv1x: 0, gv1y: 0, // C-Moon gravity velocity added to each enemy bullet
@@ -223,7 +226,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
-  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow', 'silver', 'silverTypes',
+  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'cMoonBoost', 'bulletSlow', 'silver', 'silverTypes',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -495,7 +498,7 @@ function wander(s, rng) {
 
 // Small yellow burst where a shot destroys an enemy bullet; Killer Queen makes it a big blast.
 const EXPLOSION_FRAMES = 18;
-const BIG_EXPLOSION_FRAMES = 26;
+const BIG_EXPLOSION_FRAMES = 39; // 1.5x the old 26-frame Killer Queen blast
 function spawnExplosion(s, rect, big = false) {
   if (!rect || rect.w <= 0 || rect.h <= 0) return;
   const frames = big ? BIG_EXPLOSION_FRAMES : EXPLOSION_FRAMES;
@@ -758,10 +761,16 @@ export function step(s, events, io) {
     if (s.timeStop === 0) {
       for (const b of s.killerBuffs) b.frames -= 1;
       for (const b of s.d4cBuffs) b.frames -= 1;
-      for (const b of s.cMoonBuffs) b.frames -= 1;
+      let cMoonEnded = false;
+      for (const b of s.cMoonBuffs) {
+        b.frames -= 1;
+        if (b.frames <= 0) cMoonEnded = true;
+      }
       s.killerBuffs = s.killerBuffs.filter((b) => b.frames > 0);
       s.d4cBuffs = s.d4cBuffs.filter((b) => b.frames > 0);
       s.cMoonBuffs = s.cMoonBuffs.filter((b) => b.frames > 0);
+      if (cMoonEnded) s.cMoonBoost = CMOON_BOOST_FRAMES;
+      if (s.cMoonBoost > 0) s.cMoonBoost -= 1;
       if (s.bulletSlow > 0) s.bulletSlow -= 1;
     }
     if (s.silver > 0) {
@@ -877,7 +886,7 @@ export function step(s, events, io) {
   if (!stopped && levels <= 4) music.play();
 
   if (!frozen) {
-    const speed = (s.speedBoost > 0 ? BOOST : 1) * selfScale;
+    const speed = (s.speedBoost > 0 ? BOOST : 1) * (s.cMoonBoost > 0 ? CMOON_BOOST : 1) * selfScale;
     if (s.speedBoost > 0) s.speedBoost -= 1;
     if (s.fireBoost > 0) s.fireBoost -= 1;
     const cap = s.knock > 0 ? s.knockCap * selfScale : max_speed * speed;
@@ -1016,6 +1025,7 @@ export function step(s, events, io) {
       const by = r.y + r.h / 2;
       if (Math.hypot(bx - cx, by - cy) > KILLER_RADIUS + Math.max(r.w, r.h) / 2) continue;
       io.report?.(t);
+      sfx('hit'); // one hit sound per bullet the blast takes out
       if (t === 'b1') {
         s.x_enemy = 0;
         respawnBullet1(s, io, rng);
@@ -1398,6 +1408,10 @@ export function step(s, events, io) {
     }
     if (s.bulletSlow > 0) {
       text(ctx, 'bold 18px Arial, sans-serif', `SLOW  ${(s.bulletSlow / 60).toFixed(1)}s`, [56, 189, 248], 110, hudY);
+      hudY -= 24;
+    }
+    if (s.cMoonBoost > 0) {
+      text(ctx, 'bold 18px Arial, sans-serif', `+25% SPEED  ${(s.cMoonBoost / 60).toFixed(1)}s`, [110, 231, 183], 110, hudY);
       hudY -= 24;
     }
     const ultLocked = s.timer < ULT_MIN_TIMER;
