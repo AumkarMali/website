@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SILVER_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnPowerup, spawnAlly, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SILVER_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -71,6 +71,7 @@ export function connect(name, onCount) {
   let worldFrom = null; // host id of pendingWorld
   const events = [];
   const booms = []; // explosions from other players' Killer Queen shots
+  const sacrifices = []; // host: AI helper ids sacrificed to save a player
   const ultSounds = []; // other players' Killer Queen / D4C activation clips
   const pickups = []; // host: power-up ids other players took since last frame
   const ultRequests = []; // host: player ids who pressed T since last frame
@@ -98,7 +99,7 @@ export function connect(name, onCount) {
 
   // Silver Chariot: give every player a random combat ult different from their pick.
   const COMBAT_ULTS = ['world', 'king', 'killer', 'd4c', 'cmoon'];
-  const beginSilver = (s) => {
+  const beginSilver = (s, activatorId) => {
     const pick = (base) => {
       const pool = COMBAT_ULTS.filter((t) => t !== base);
       return pool[Math.floor(Math.random() * pool.length)];
@@ -108,6 +109,8 @@ export function connect(name, onCount) {
     for (const [gid, g] of ghosts) types[gid] = pick(g.baseUlt || 'world');
     s.silver = SILVER_FRAMES;
     s.silverTypes = types;
+    const g = activatorId === id ? null : ghosts.get(activatorId);
+    spawnAlly(s, activatorId, activatorId === id ? s.x : (g?.x ?? 400), activatorId === id ? s.y : (g?.y ?? 220));
   };
 
   channel
@@ -138,6 +141,9 @@ export function connect(name, onCount) {
     })
     .on('broadcast', { event: 'ultsound' }, ({ payload: p }) => {
       if (p?.type === 'killer' || p?.type === 'd4c' || p?.type === 'cmoon' || p?.type === 'silver') ultSounds.push(p.type);
+    })
+    .on('broadcast', { event: 'sacrifice' }, ({ payload: p }) => {
+      if (p?.allyId && isHost()) sacrifices.push(p.allyId);
     })
     .on('broadcast', { event: 'ult' }, ({ payload: p }) => {
       if (p?.from && isHost()) ultRequests.push({ id: p.from, type: p.type });
@@ -176,7 +182,7 @@ export function connect(name, onCount) {
         for (const req of ultRequests.splice(0)) {
           if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
           if (req.type === 'silver') {
-            if (s.silver === 0) beginSilver(s);
+            if (s.silver === 0) beginSilver(s, req.id);
           } else if (req.type === 'cmoon') {
             addBuff(s.cMoonBuffs, req.id, CMOON_FRAMES);
           } else if (req.type === 'd4c') {
@@ -197,6 +203,10 @@ export function connect(name, onCount) {
         for (const uid of eraseRequests.splice(0)) {
           if (s.slow > 0 && s.slowBy === uid) eraseKing(s);
         }
+      }
+      if (sacrifices.length && isHost()) {
+        const gone = new Set(sacrifices.splice(0));
+        s.allies = (s.allies || []).filter((a) => !gone.has(a.id));
       }
       for (const g of ghosts.values()) {
         const level = Math.floor((g.score || 0) / POWERUP_STEP);
@@ -293,7 +303,7 @@ export function connect(name, onCount) {
         if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) return true;
         if (type === 'silver') {
           if (s.silver > 0) return true;
-          beginSilver(s);
+          beginSilver(s, id);
         } else if (type === 'cmoon') {
           addBuff(s.cMoonBuffs, id, CMOON_FRAMES);
         } else if (type === 'd4c') {
@@ -347,6 +357,7 @@ export function connect(name, onCount) {
       const ys = [];
       if (s.cont && !avoid.has(id)) ys.push(s.y);
       for (const [gid, g] of ghosts) if (g.alive && !avoid.has(gid)) ys.push(g.ty);
+      for (const a of s.allies || []) if (!avoid.has(a.id)) ys.push(a.y + 20);
       if (ys.length) return ys[Math.floor(Math.random() * ys.length)];
       if (avoid.has(id)) {
         let y = 30 + Math.random() * 510;
@@ -354,6 +365,20 @@ export function connect(name, onCount) {
         return y;
       }
       return s.y;
+    },
+
+    isPlayerAlive(pid) {
+      if (pid === id) return alive;
+      return !!ghosts.get(pid)?.alive;
+    },
+
+    playerCount() {
+      return Object.keys(channel.presenceState()).length;
+    },
+
+    sacrificeAlly(allyId) {
+      if (isHost() || !synced) return;
+      channel.send({ type: 'broadcast', event: 'sacrifice', payload: { allyId } });
     },
 
     buffTarget(s, buffId) {

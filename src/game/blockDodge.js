@@ -81,7 +81,6 @@ const orange = [247, 113, 64];
 const green = [161, 235, 52];
 const peach = [245, 158, 66];
 const red = [255, 0, 0];
-const purple = [99, 20, 255];
 const grey12 = 'grey12';
 const air_color = [195, 196, 181];
 const max_speed = 7;
@@ -181,6 +180,7 @@ export function createState(ultType = 'world') {
     cMoonBuffs: [], // [{ id, frames }] players pulling and absorbing bullets with C-Moon
     silver: 0, // frames left of the Silver Chariot ult swap
     silverTypes: {}, // { playerId: ultType } temporary assignments
+    allies: [], // AI helpers summoned by Silver Chariot (host-simulated, shared)
     gv1x: 0, gv1y: 0, // C-Moon gravity velocity added to each enemy bullet
     gv2x: 0, gv2y: 0,
     gv21x: 0, gv21y: 0,
@@ -224,7 +224,7 @@ export const WORLD_KEYS = [
   'x_enemy3', 'rand3', 'color3', 'enemy_accel3', 'color4', 'x_warn', 'Warn_goto',
   'timer', 'count', 'count_init', 'intro_timer', 'bullet_types', 'powerups',
   'timeStop', 'timeStopBy', 'ultWindup', 'slow', 'slowBy', 'kingWindup', 'eraseSeq',
-  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow', 'silver', 'silverTypes',
+  'killerBuffs', 'd4cBuffs', 'cMoonBuffs', 'bulletSlow', 'silver', 'silverTypes', 'allies',
 ];
 // Keys of each enemy bullet, so a guest can keep its own copy of one it just hit.
 export const BULLET_KEYS = {
@@ -250,6 +250,25 @@ function beginSilverLocal(s, selfId) {
   const pool = COMBAT_ULTS.filter((t) => t !== s.baseUltType);
   s.silver = SILVER_FRAMES;
   s.silverTypes = { [selfId]: pool[Math.floor(Math.random() * pool.length)] };
+  spawnAlly(s, selfId, s.x, s.y);
+}
+
+// Silver Chariot's AI helper: full AI block with shooting, a random ult and 3 hearts.
+export function spawnAlly(s, owner, x, y) {
+  if (s.allies.length >= 3) return;
+  const id = `ally-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+  s.allies.push({
+    id,
+    owner,
+    x: Math.max(560, Math.min(700, x)),
+    y: Math.max(80, Math.min(480, y)),
+    hp: 3,
+    shootCd: 20,
+    ultCd: 15 * 60,
+    ultType: COMBAT_ULTS[Math.floor(Math.random() * COMBAT_ULTS.length)],
+    shots: [],
+    flash: 0,
+  });
 }
 
 // ---- King Crimson rollback ----
@@ -527,6 +546,19 @@ export function drawD4cOrbit(ctx, cx, cy, t) {
   ctx.restore();
 }
 
+// Silver Chariot, solo: swap your hearts with your AI helper's.
+function swapAllyLives(s, io) {
+  if (!s.cont || s.baseUltType !== 'silver' || !io.solo?.()) return;
+  const ally = s.allies.find((a) => a.hp > 0);
+  if (!ally) return;
+  const hearts = Math.max(0, Math.min(MAX_LIVES, Math.trunc(pyRound(s.lives))));
+  const hp = Math.max(0, Math.min(MAX_LIVES, ally.hp));
+  s.lives = hp;
+  ally.hp = hearts;
+  if (ally.hp <= 0) s.allies = s.allies.filter((a) => a.id !== ally.id);
+  io.sfx?.('bounce');
+}
+
 // Knockback: for a moment the speed limit is `cap`, whatever boost is active.
 function knock(s, cap) {
   s.knock = KNOCK_FRAMES;
@@ -722,6 +754,7 @@ export function step(s, events, io) {
           tryUlt(s, io, frozenNow);
         }
       }
+      if (event.key === 'h' && !frozenNow) swapAllyLives(s, io);
       if (event.key === 'f') {
         s.fHeld = true;
         if (!frozenNow && !aiControlledNow) fire(s, sfx);
@@ -864,7 +897,6 @@ export function step(s, events, io) {
   if (s.cont === true) {
     text(ctx, FONTS.score, 'Score: ' + s.score, green, 700, 20);
     text(ctx, FONTS.lives, "Live's ", orange, 455, 22.5);
-    text(ctx, FONTS.bullets, s.bullet_types, purple, 190, 19.8);
   }
 
   if (levels <= 7) {
@@ -1061,7 +1093,8 @@ export function step(s, events, io) {
 
   if (!stopped) {
     s.enemy_accel += 0.001;
-    s.x_enemy += s.enemy_accel * bulletScale;
+    const whiteSpeed = Math.min(s.enemy_accel, s.enemy_accel3 * SNIPER_SPEED * 0.75);
+    s.x_enemy += whiteSpeed * bulletScale;
 
     s.x_enemy3 += 0.01 * bulletScale;
 
@@ -1337,6 +1370,136 @@ export function step(s, events, io) {
     }
   }
 
+  // AI helpers summoned by Silver Chariot: host-simulated, shared with every player.
+  if (s.allies.length && (io.ownsWorld ? io.ownsWorld() : true)) {
+    const resetBullet = (type) => {
+      if (type === 'b1') {
+        s.x_enemy = 0;
+        respawnBullet1(s, io, rng);
+      } else if (type === 'b2') {
+        s.x_enemy2 = 0;
+        s.rand2 = rng.randint(30, 540);
+      } else if (type === 'b21') {
+        s.x_enemy21 = 780;
+        s.rand21 = rng.randint(30, 540);
+      } else {
+        s.rand3 = s.x_warn + 11;
+        s.x_enemy3 = 0;
+      }
+    };
+    const liveBullets = () => {
+      const list = [];
+      if (s.color !== 'grey12') list.push({ type: 'b1', rect: bullet });
+      if (s.color2 !== 'grey12') list.push({ type: 'b2', rect: bullet2 });
+      if (s.color21 !== 'grey12') list.push({ type: 'b21', rect: bullet21 });
+      if (s.color3 !== 'grey12') list.push({ type: 'b3', rect: bullet3 });
+      return list;
+    };
+    for (const a of s.allies) {
+      // time stop freezes every helper except the one that stopped time
+      if (stopped && s.timeStopBy !== a.id) continue;
+      const slowScale = s.slow > 0 && s.slowBy !== a.id ? 0.25 : 1;
+      let targetY = a.y + 20;
+      let best = Infinity;
+      for (const b of liveBullets()) {
+        const by = b.rect.y + b.rect.h / 2;
+        const d = Math.abs(by - (a.y + 20));
+        if (d < best) {
+          best = d;
+          targetY = by;
+        }
+      }
+      const moveSpeed = slowScale * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1);
+      a.y += Math.max(-5, Math.min(5, targetY - (a.y + 20))) * moveSpeed;
+      a.y = Math.max(60, Math.min(500, a.y));
+      a.x += Math.max(-4, Math.min(4, 680 - a.x)) * moveSpeed;
+      a.x = Math.max(560, Math.min(700, a.x));
+
+      if (a.shootCd > 0) a.shootCd -= slowScale;
+      if (a.shootCd <= 0) {
+        a.shootCd = 20;
+        a.shots.push({ x: a.x, y: a.y + 16 });
+      }
+      for (const shot of a.shots) shot.x -= 13 * slowScale;
+      a.shots = a.shots.filter((shot) => shot.x > -30);
+
+      if (a.ultCd > 0) a.ultCd -= 1;
+      if (a.ultCd <= 0) {
+        const globalActive = s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0;
+        let used = true;
+        if (globalActive) used = false;
+        else if (a.ultType === 'world') {
+          s.ultWindup = ULT_WINDUP_FRAMES;
+          s.timeStopBy = a.id;
+        } else if (a.ultType === 'king') {
+          s.kingWindup = KING_WINDUP_FRAMES;
+          s.slowBy = a.id;
+        } else if (a.ultType === 'killer') {
+          addBuff(s.killerBuffs, a.id, KILLER_FRAMES);
+        } else if (a.ultType === 'd4c') {
+          addBuff(s.d4cBuffs, a.id, D4C_FRAMES);
+        } else if (a.ultType === 'cmoon') {
+          addBuff(s.cMoonBuffs, a.id, CMOON_FRAMES);
+        } else {
+          used = false;
+        }
+        if (used) {
+          if (a.ultType === 'killer' || a.ultType === 'd4c' || a.ultType === 'cmoon') {
+            io.sfx?.(a.ultType);
+            io.sendUltSound?.(a.ultType);
+          }
+          a.ultCd = 15 * 60;
+        }
+      }
+
+      for (const shot of a.shots) {
+        if (shot.dead) continue;
+        const sr = { x: shot.x, y: shot.y, w: 3, h: 9 };
+        for (const b of liveBullets()) {
+          if (!collide(sr, b.rect)) continue;
+          resetBullet(b.type);
+          shot.dead = true;
+          const cx = b.rect.x + b.rect.w / 2;
+          const cy = b.rect.y + b.rect.h / 2;
+          const blast = hasBuff(s.killerBuffs, a.id);
+          spawnExplosion(s, { x: cx - 1, y: cy - 1, w: 2, h: 2 }, blast);
+          io.sendBoom?.(cx, cy, blast);
+          sfx('hit');
+          if (blast) {
+            for (const other of liveBullets()) {
+              if (other.type === b.type) continue;
+              const ox = other.rect.x + other.rect.w / 2;
+              const oy = other.rect.y + other.rect.h / 2;
+              if (Math.hypot(ox - cx, oy - cy) <= KILLER_RADIUS) {
+                resetBullet(other.type);
+                sfx('hit');
+              }
+            }
+          }
+          break;
+        }
+      }
+      a.shots = a.shots.filter((shot) => !shot.dead);
+
+      const ar = { x: a.x, y: a.y, w: 40, h: 40 };
+      for (const b of liveBullets()) {
+        if (!collide(ar, b.rect)) continue;
+        resetBullet(b.type);
+        const cx = b.rect.x + b.rect.w / 2;
+        const cy = b.rect.y + b.rect.h / 2;
+        spawnExplosion(s, { x: cx - 1, y: cy - 1, w: 2, h: 2 });
+        io.sendBoom?.(cx, cy, false);
+        if (hasBuff(s.cMoonBuffs, a.id)) continue; // C-Moon absorbs the hit
+        a.hp -= 1;
+        a.flash = 12;
+        sfx('ricochet');
+        if (a.hp <= 0) break;
+      }
+      if (a.flash > 0) a.flash -= 1;
+    }
+    s.allies = s.allies.filter((a) => a.hp > 0);
+  }
+
   // small yellow bursts where shots destroyed enemy bullets
   if (ctx) {
     for (const e of s.explosions) {
@@ -1376,6 +1539,28 @@ export function step(s, events, io) {
 
   // D4C: pink dots orbit the protected player
   if (ctx && d4cOn) drawD4cOrbit(ctx, s.x + 25, s.y + 25, s.d4cAnim);
+
+  // AI helpers from Silver Chariot
+  if (ctx) {
+    for (const a of s.allies) {
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = a.flash > 0 ? '#e5e7eb' : '#34d399';
+      ctx.fillRect(a.x, a.y, 40, 40);
+      ctx.fillStyle = '#052e16';
+      ctx.font = 'bold 13px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('AI', a.x + 20, a.y + 14);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(String(a.hp), a.x + 20, a.y + 28);
+      for (const shot of a.shots) {
+        ctx.fillStyle = '#fde047';
+        ctx.fillRect(shot.x, shot.y, 3, 9);
+      }
+      ctx.restore();
+    }
+  }
 
   // every 50 points adds an icon to the shared map; while any D4C is active it drops every
   // 10 points instead. Only the host (or a single player) creates them, but every player
@@ -1446,7 +1631,23 @@ export function step(s, events, io) {
 
   s.death = Math.trunc(pyRound(s.lives));
 
-  if (s.death <= 0) s.cont = false;
+  if (s.death <= 0) {
+    // A living AI helper takes the death instead: the helper dies, you keep one life.
+    const savior = !s.remoteKO
+      && s.allies.find((a) => (io.isPlayerAlive ? io.isPlayerAlive(a.owner) : true));
+    if (savior) {
+      s.allies = s.allies.filter((a) => a.id !== savior.id);
+      io.sacrificeAlly?.(savior.id);
+      spawnExplosion(s, { x: savior.x + 19, y: savior.y + 19, w: 2, h: 2 }, true);
+      io.sendBoom?.(savior.x + 20, savior.y + 20, true);
+      sfx('hit');
+      s.lives = 1;
+      s.death = 1;
+      s.cont = true;
+    } else {
+      s.cont = false;
+    }
+  }
 
   if (s.cont === false) {
     if (music.pause) music.pause(); // keep the offset so an erase can resume it
