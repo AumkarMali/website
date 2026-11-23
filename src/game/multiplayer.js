@@ -355,8 +355,8 @@ export function connect(name, onCount) {
       // D4C: never aim a bullet at any player it is protecting.
       const avoid = new Set((s.d4cBuffs || []).map((b) => b.id));
       const ys = [];
-      if (s.cont && !avoid.has(id)) ys.push(s.y);
-      for (const [gid, g] of ghosts) if (g.alive && !avoid.has(gid)) ys.push(g.ty);
+      if (s.cont && !avoid.has(id)) ys.push(s.y + 25);
+      for (const [gid, g] of ghosts) if (g.alive && !avoid.has(gid)) ys.push(g.ty + 25);
       for (const a of s.allies || []) if (!avoid.has(a.id)) ys.push(a.y + 25);
       if (ys.length) return ys[Math.floor(Math.random() * ys.length)];
       if (avoid.has(id)) {

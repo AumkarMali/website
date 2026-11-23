@@ -430,7 +430,7 @@ const Game = ({ onClose }) => {
           if (mp) return mp.targetY(st);
           const avoid = new Set((st.d4cBuffs || []).map((b) => b.id));
           const ys = [];
-          if (!avoid.has(null)) ys.push(st.y);
+          if (!avoid.has(null)) ys.push(st.y + 25);
           for (const a of st.allies || []) if (!avoid.has(a.id)) ys.push(a.y + 25);
           return ys.length ? ys[Math.floor(Math.random() * ys.length)] : st.y;
         },

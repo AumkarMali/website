@@ -269,6 +269,15 @@ export function spawnAlly(s, owner, x, y) {
     y: Math.max(80, Math.min(480, y)),
     hp: 3,
     shootCd: FIRE_EVERY,
+    nextLower: true,
+    aimLower: null, // barrel the helper is currently lining up
+    aimTargetY: null,
+    dodgeTtl: 0, // keep dodging after the bullet leaves the lane so we don't re-enter early
+    dodgeDir: 0,
+    x_change: 0,
+    y_change: 0,
+    accel_x: 0,
+    accel_y: 0,
     ultCd: 0,
     ultType: ALLY_ULTS[Math.floor(Math.random() * ALLY_ULTS.length)],
     shots: [],
@@ -1381,17 +1390,17 @@ export function step(s, events, io) {
     const resetBullet = (type) => {
       destroyed.add(type);
       if (type === 'b1') {
-        s.x_enemy = 0;
-        respawnBullet1(s, io, rng);
+        s.x_enemy = stopped ? -60 : 0;
+        if (!stopped) respawnBullet1(s, io, rng);
       } else if (type === 'b2') {
-        s.x_enemy2 = 0;
-        s.rand2 = rng.randint(30, 540);
+        s.x_enemy2 = stopped ? -60 : 0;
+        if (!stopped) s.rand2 = rng.randint(30, 540);
       } else if (type === 'b21') {
-        s.x_enemy21 = 780;
-        s.rand21 = rng.randint(30, 540);
+        s.x_enemy21 = stopped ? 860 : 780;
+        if (!stopped) s.rand21 = rng.randint(30, 540);
       } else {
-        s.rand3 = s.x_warn + 11;
-        s.x_enemy3 = 0;
+        s.x_enemy3 = stopped ? -60 : 0;
+        if (!stopped) s.rand3 = s.x_warn + 11;
       }
     };
     const liveBullets = () => {
@@ -1402,30 +1411,188 @@ export function step(s, events, io) {
       if (s.color3 !== 'grey12' && s.x_enemy3 > 1) list.push({ type: 'b3', rect: bullet3 });
       return list;
     };
+    // Enemy bullets the helper can see, with current velocity, for dodging and aiming.
+    const sensed = [];
+    if (s.color !== 'grey12' && s.x_enemy > 1) {
+      sensed.push({
+        type: 'b1', x: s.x_enemy, y: s.rand, w: s.bulletW, h: s.bulletH,
+        vx: stopped ? 0 : Math.min(s.enemy_accel, s.enemy_accel3 * SNIPER_SPEED * 0.75) * bulletScale + (s.gv1x || 0),
+        vy: stopped ? 0 : s.gv1y || 0,
+      });
+    }
+    if (s.color2 !== 'grey12' && s.x_enemy2 > 1) {
+      sensed.push({
+        type: 'b2', x: s.x_enemy2, y: s.rand2, w: 20, h: 15,
+        vx: stopped ? 0 : s.enemy_accel2 * bulletScale + (s.gv2x || 0),
+        vy: stopped ? 0 : s.gv2y || 0,
+      });
+    }
+    if (s.color21 !== 'grey12' && s.x_enemy21 < WIDTH - 21) {
+      sensed.push({
+        type: 'b21', x: s.x_enemy21, y: s.rand21, w: 20, h: 15,
+        vx: stopped ? 0 : -s.enemy_accel2 * bulletScale + (s.gv21x || 0),
+        vy: stopped ? 0 : s.gv21y || 0,
+      });
+    }
+    if (s.color3 !== 'grey12' && s.x_enemy3 > 1) {
+      sensed.push({
+        type: 'b3', x: s.x_enemy3, y: s.rand3, w: 20, h: 7,
+        vx: stopped ? 0 : s.enemy_accel3 * SNIPER_SPEED * bulletScale + (s.gv3x || 0),
+        vy: stopped ? 0 : s.gv3y || 0,
+      });
+    }
     for (const a of s.allies) {
       // time stop freezes every helper except the one that stopped time
-      if (stopped && s.timeStopBy !== a.id) continue;
+      const ownTimeStop = stopped && s.timeStopBy === a.id;
+      if (stopped && !ownTimeStop) continue;
       const slowScale = s.slow > 0 && s.slowBy !== a.id ? 0.25 : 1;
-      let targetY = a.y + 25;
-      let best = Infinity;
-      for (const b of liveBullets()) {
-        const by = b.rect.y + b.rect.h / 2;
-        const d = Math.abs(by - (a.y + 25));
-        if (d < best) {
-          best = d;
-          targetY = by;
+      const moveSpeed = slowScale * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1);
+      const aiCap = max_speed * moveSpeed;
+      const cx = a.x + 25;
+      const cy = a.y + 25;
+      let moveX = 0;
+      let moveY = 0;
+      let aimAt = null;
+      let aimLower = null;
+
+      if (ownTimeStop) {
+        a.dodgeTtl = 0;
+        a.dodgeDir = 0;
+        // Frozen bullets: clear the one closest to the helper's owner, not just the nearest to us.
+        const guard = a.owner && io.buffTarget ? io.buffTarget(s, a.owner) : null;
+        const guardY = guard ? guard.y : s.y + 25;
+        let best = null;
+        for (const b of sensed) {
+          if (b.x + b.w > a.x + 10) continue; // shots only travel left
+          const by = b.y + b.h / 2;
+          const d = Math.abs(by - guardY);
+          if (!best || d < best.d) best = { by, d };
+        }
+        if (best) aimAt = best;
+        moveX = a.x > 660 ? -1 : a.x < 600 ? 1 : 0;
+      } else {
+        let behind = null;
+        let front = null;
+        for (const b of sensed) {
+          if (Math.abs(b.vx) < 0.01) continue;
+          const bx = b.x + b.w / 2;
+          const by = b.y + b.h / 2;
+          const t = (cx - bx) / b.vx; // frames until it reaches our x
+          if (t <= 0 || t > 55) continue;
+          const py = by + b.vy * t;
+          if (py < cy - 34 || py > cy + 34) continue; // it passes above/below
+          if (bx > cx + 8) {
+            if (!behind || t < behind.t) behind = { by, t };
+          } else if (!front || t < front.t) {
+            front = { by, t };
+          }
+        }
+        // Yellow bullets behind (b21) cannot be shot: step out of their lane early.
+        if (behind && behind.t < 60) {
+          moveY = behind.by > cy ? -1 : 1;
+          moveX = a.x > 680 ? -1 : a.x < 560 ? 1 : 0;
+          a.dodgeDir = moveY;
+          a.dodgeTtl = Math.max(a.dodgeTtl || 0, 60);
+        } else if (front && front.t < 28) {
+          moveY = front.by > cy ? -1 : 1;
+          moveX = a.x > 680 ? -1 : a.x < 560 ? 1 : 0;
+          a.dodgeDir = moveY;
+          a.dodgeTtl = Math.max(a.dodgeTtl || 0, 45);
+        } else {
+          // Otherwise line a barrel up with a bullet in front and shoot it.
+          let best = null;
+          for (const b of sensed) {
+            const bx = b.x + b.w / 2;
+            if (bx >= a.x + 5) continue; // behind: leave it to the dodge
+            const by = b.y + b.h / 2;
+            const d = Math.abs(by - cy);
+            if (!best || d < best.d) best = { by, d };
+          }
+          if (best) aimAt = best;
+          moveX = a.x > 660 ? -1 : a.x < 600 ? 1 : 0;
         }
       }
-      const moveSpeed = slowScale * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1);
-      a.y += Math.max(-5, Math.min(5, targetY - (a.y + 25))) * moveSpeed;
-      a.y = Math.max(60, Math.min(500, a.y));
-      a.x += Math.max(-4, Math.min(4, 680 - a.x)) * moveSpeed;
-      a.x = Math.max(560, Math.min(700, a.x));
 
+      if (aimAt) {
+        // Pick a barrel once per target and hold it, so the block doesn't oscillate 65px.
+        if (a.aimLower == null || a.aimTargetY == null || Math.abs(a.aimTargetY - aimAt.by) > 16) {
+          a.aimLower = Math.abs(aimAt.by - (a.y + 50)) <= Math.abs(aimAt.by - (a.y - 15));
+          a.aimTargetY = aimAt.by;
+        }
+        aimLower = a.aimLower;
+        const desiredY = aimAt.by - (aimLower ? 50 : -15);
+        const diff = desiredY - a.y;
+        if (Math.abs(diff) > 2) moveY = diff > 0 ? 1 : -1;
+        else moveY = 0;
+      } else {
+        a.aimLower = null;
+        a.aimTargetY = null;
+      }
+      // Stay out of the lane until the bullet has fully passed us.
+      if ((a.dodgeTtl || 0) > 0) {
+        a.dodgeTtl -= 1;
+        moveY = a.dodgeDir;
+        aimAt = null;
+        aimLower = null;
+      }
+      if (moveY < 0 && a.y < 45) moveY = 1;
+      else if (moveY > 0 && a.y > 540) moveY = -1;
+      if ((a.dodgeTtl || 0) > 0) a.dodgeDir = moveY;
+
+      // Human-like steering: approach a target velocity using the player's 0.2 acceleration.
+      const approach = (err, velocity, maxV) => {
+        const stop = (velocity * velocity) / 0.4 + 3;
+        if (Math.abs(err) <= stop) return 0;
+        return Math.sign(err) * Math.min(maxV, Math.abs(err) * 0.4);
+      };
+      let targetVy;
+      if (aimAt) {
+        const desiredY = aimAt.by - (aimLower ? 50 : -15);
+        targetVy = approach(desiredY - a.y, a.y_change, 4.5);
+      } else if (moveY !== 0) {
+        targetVy = moveY * 5.5;
+      } else {
+        targetVy = approach(300 - a.y, a.y_change, 2.5);
+      }
+      const targetVx = moveX !== 0
+        ? moveX * 3
+        : approach(630 - a.x, a.x_change, 2.5);
+      const steer = (target, current) => {
+        const delta = target - current;
+        if (delta > 0.1) return 1;
+        if (delta < -0.1) return -1;
+        return 0;
+      };
+      a.accel_x = steer(targetVx, a.x_change) * 0.2;
+      a.accel_y = steer(targetVy, a.y_change) * 0.2;
+      a.x_change += a.accel_x * moveSpeed;
+      a.y_change += a.accel_y * moveSpeed;
+      if (Math.abs(a.x_change) > aiCap) a.x_change = Math.sign(a.x_change) * aiCap;
+      if (Math.abs(a.y_change) > aiCap) a.y_change = Math.sign(a.y_change) * aiCap;
+      if (a.accel_x === 0) a.x_change *= 0.92;
+      if (a.accel_y === 0) a.y_change *= 0.92;
+      a.x += a.x_change;
+      a.y += a.y_change;
+      if (a.x < 2) { a.x = 2; a.x_change = Math.max(0, a.x_change); }
+      else if (a.x > 749) { a.x = 749; a.x_change = Math.min(0, a.x_change); }
+      if (a.y < 37) { a.y = 37; a.y_change = Math.max(0, a.y_change); }
+      else if (a.y > 545) { a.y = 545; a.y_change = Math.min(0, a.y_change); }
+
+      // Same two side barrels as a player, alternating; only fire at something in front,
+      // and wait until the aligned barrel is on target.
+      const aligned = aimAt && aimLower != null
+        && Math.abs((a.y + (aimLower ? 50 : -15)) - aimAt.by) <= 18;
+      const canShoot = sensed.some((b) => b.x + b.w < a.x + 10);
       if (a.shootCd > 0) a.shootCd -= slowScale;
-      if (a.shootCd <= 0) {
+      if (a.shootCd <= 0 && canShoot && (!aimAt || aligned)) {
+        const lower = a.nextLower;
+        a.shots.push({
+          x: a.x + 10,
+          y: (lower ? a.y + 50 : a.y - 15) + a.y_change,
+          lower,
+        });
+        a.nextLower = !lower;
         a.shootCd = FIRE_EVERY;
-        a.shots.push({ x: a.x, y: a.y + 25 });
       }
       for (const shot of a.shots) shot.x -= 13 * slowScale;
       a.shots = a.shots.filter((shot) => shot.x > -30);
@@ -1463,7 +1630,7 @@ export function step(s, events, io) {
 
       for (const shot of a.shots) {
         if (shot.dead) continue;
-        const sr = { x: shot.x, y: shot.y, w: 3, h: 9 };
+        const sr = { x: shot.x, y: shot.y, w: 3, h: 15 };
         for (const b of liveBullets()) {
           if (!collide(sr, b.rect)) continue;
           resetBullet(b.type);
@@ -1580,7 +1747,7 @@ export function step(s, events, io) {
       for (const shot of a.shots) {
         if (images.bullet) ctx.drawImage(images.bullet, Math.trunc(shot.x - 5), Math.trunc(shot.y - 1));
         else {
-          ctx.fillStyle = a.color;
+          ctx.fillStyle = shot.lower ? 'rgb(255,223,0)' : '#8a8f98';
           ctx.fillRect(shot.x, shot.y, 3, 15);
         }
       }
