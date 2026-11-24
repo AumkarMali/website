@@ -15,7 +15,7 @@
 //
 // Needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (the publishable key is public).
 import { createClient } from '@supabase/supabase-js';
-import { BULLET_KEYS, getWorld, spawnPowerup, spawnAlly, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
+import { BULLET_KEYS, getWorld, spawnScoreDrops, POWERUP_STEP, spawnAlly, ULT_WINDUP_FRAMES, KING_WINDUP_FRAMES, KILLER_FRAMES, D4C_FRAMES, CMOON_FRAMES, SLOW_FRAMES, ULT_MIN_TIMER, saveKingSnapshot, eraseKing, drawD4cOrbit } from './blockDodge';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -25,8 +25,6 @@ const WORLD_MS = 66; // host's bullets + clock: ~15 per second
 const STALE_MS = 3000; // drop a ghost that has gone quiet
 const HIT_HOLD_MS = 350; // a guest keeps its own copy of a bullet it just hit, until the host's reset arrives
 const PICKUP_HOLD_MS = 3000; // a guest ignores a power-up it just took while the host removes it
-const POWERUP_EVERY = 50;
-const POWERUP_STEP = 10; // ghosts track scores per 10 pts so D4C can drop every step
 const SMOOTH = 0.25; // per-frame approach to a ghost's latest position (hides the 10 Hz steps)
 const SHOT_SPEED = 13; // matches the game: shots move 13 px per frame
 const KING_SLOW = 0.25; // King Crimson: everything but the user moves at 25%
@@ -201,12 +199,7 @@ export function connect(name, onCount) {
       for (const g of ghosts.values()) {
         const level = Math.floor((g.score || 0) / POWERUP_STEP);
         if (level > g.level) {
-          if (isHost()) {
-            const d4cDrop = s.d4cBuffs.length > 0;
-            for (let u = g.level + 1; u <= level; u += 1) {
-              if (d4cDrop || u % (POWERUP_EVERY / POWERUP_STEP) === 0) spawnPowerup(s);
-            }
-          }
+          if (isHost()) spawnScoreDrops(s, g.level + 1, level);
           g.level = level;
         }
       }

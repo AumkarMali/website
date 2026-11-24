@@ -27,16 +27,18 @@ const KICK_FRAMES = 8; // loaded-bullet recoil animation after each shot
 const KICK_DIST = 7; // px the loaded bullets jump back
 const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
 // Power-up: every time any player reaches a multiple of 50 points, a random icon appears at
-// a random spot: an instant ultimate, 10 s of 2x fire rate, 10 s of half-speed enemy bullets,
-// or an extra life (up to MAX_LIVES).
+// a random spot: 10 s of 2x fire rate, 10 s of half-speed enemy bullets, or an extra life
+// (up to MAX_LIVES). An ult icon drops on its own faster cadence, every 25 points.
 // Icons stay on the field until someone picks them up or the 50 s lifetime runs out.
 const POWERUP_EVERY = 50;
-const POWERUP_STEP = 10; // score granularity; D4C drops an icon every step instead of every 5
+const ULT_DROP_EVERY = 25; // the ult icon drops twice as often as the rest
+const D4C_DROP_EVERY = 10; // while any D4C is up, the random icon drops every 10 points
+export const POWERUP_STEP = 5; // score granularity, small enough to divide all three
 const POWERUP_FRAMES = 50 * 60; // icon disappears after 50 s if nobody picks it up
 const POWERUP_SIZE = 30;
 const BOOST_FRAMES = 10 * 60;
 const BOOST = 2;
-const POWERUP_TYPES = ['ult', 'fire', 'life', 'slow'];
+const POWERUP_TYPES = ['fire', 'life', 'slow'];
 const MAX_LIVES = 3;
 export const SLOW_FRAMES = 10 * 60; // enemy-bullet slow power-up lasts 10 s
 // Ultimate, "the world": pressing T starts the clip and a 2 s windup while the game still
@@ -166,7 +168,7 @@ export function createState(ultType = 'world') {
     fireTimer: 0, // frames until the next held-F shot
     kickLower: 0, // frames of lower-barrel recoil left
     kickUpper: 0, // frames of upper-barrel recoil left
-    powerupLevel: 0, // last 10-point score step already processed for drops
+    powerupLevel: 0, // last score step already processed for drops
     powerups: [], // { id, x, y, ttl, type } icons lying on the map
     explosions: [], // { x, y, ttl } yellow bursts when a shot destroys an enemy bullet
     timeStop: 0, // frames of stopped time left (ultimate)
@@ -303,6 +305,8 @@ export function spawnAlly(s, owner, x, y) {
     // waits a full cooldown before its first ult, like a player who just used one; this
     // also keeps a chain of Silver Chariot helpers summoning at a steady pace
     ultCd: ultCooldownFor(ultType, s.ultRush),
+    freeUlt: false, // picked up an ult icon: the next cast doesn't spend the cooldown
+    ultCdOwed: 0,
     shots: [],
     flash: 0,
   });
@@ -473,17 +477,28 @@ function drawPowerup(ctx, p, images = {}) {
   ctx.restore();
 }
 
-// Drops one random icon at a random spot. The id lets a pickup on one screen remove the same
-// icon from everyone else's map.
-export function spawnPowerup(s, rng = Math.random) {
+// Drops one icon at a random spot, random type unless one is named. The id lets a pickup on
+// one screen remove the same icon from everyone else's map.
+export function spawnPowerup(s, rng = Math.random, type = null) {
   const id = `${Date.now().toString(36)}-${Math.floor(rng() * 1e9).toString(36)}`;
   s.powerups.push({
     id,
     x: 40 + rng() * (WIDTH - 80 - POWERUP_SIZE),
     y: 60 + rng() * (HEIGHT - 100 - POWERUP_SIZE),
     ttl: POWERUP_FRAMES,
-    type: POWERUP_TYPES[Math.floor(rng() * POWERUP_TYPES.length)],
+    type: type || POWERUP_TYPES[Math.floor(rng() * POWERUP_TYPES.length)],
   });
+}
+
+// Icons owed for crossing score steps `from`..`to` (inclusive), in POWERUP_STEP units.
+// Shared with the multiplayer host, which runs the same rule for every other player.
+export function spawnScoreDrops(s, from, to) {
+  const d4cDrop = s.d4cBuffs.length > 0;
+  for (let u = from; u <= to; u += 1) {
+    const points = u * POWERUP_STEP;
+    if (points % ULT_DROP_EVERY === 0) spawnPowerup(s, Math.random, 'ult');
+    if (points % (d4cDrop ? D4C_DROP_EVERY : POWERUP_EVERY) === 0) spawnPowerup(s);
+  }
 }
 
 // Ultimate: freeze time (The World), slow the world (King Crimson), or a personal buff
@@ -983,8 +998,11 @@ export function step(s, events, io) {
     if (!stopped) p.ttl -= 1;
     if (!frozen && s.cont && collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
       if (p.type === 'ult') {
-        s.ultCooldown = 0; // ready again even if the ult can't start this instant
+        // a free cast: it fires now and leaves your own cooldown exactly where it was
+        const owed = s.ultCooldown;
+        s.ultCooldown = 0;
         tryUlt(s, io, frozen, true);
+        s.ultCooldown = owed;
       } else if (p.type === 'fire') s.fireBoost = BOOST_FRAMES;
       else if (p.type === 'slow') s.bulletSlow = SLOW_FRAMES;
       else s.lives = Math.min(MAX_LIVES, s.lives + 1);
@@ -1762,7 +1780,9 @@ export function step(s, events, io) {
             io.sfx?.(a.ultType);
             io.sendUltSound?.(a.ultType);
           }
-          a.ultCd = ultCooldownFor(a.ultType, s.ultRush);
+          a.ultCd = a.freeUlt ? (a.ultCdOwed || 0) : ultCooldownFor(a.ultType, s.ultRush);
+          a.freeUlt = false;
+          a.ultCdOwed = 0;
         }
       }
 
@@ -1802,8 +1822,11 @@ export function step(s, events, io) {
         const leftForPlayers = [];
         for (const p of s.powerups) {
           if (p.ttl > 0 && collide(ar, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
-            if (p.type === 'ult') a.ultCd = 0; // helper ults on the next frame
-            else if (p.type === 'fire') a.fireBoost = BOOST_FRAMES;
+            if (p.type === 'ult') { // helper ults next frame, for free
+              a.ultCdOwed = a.ultCd;
+              a.ultCd = 0;
+              a.freeUlt = true;
+            } else if (p.type === 'fire') a.fireBoost = BOOST_FRAMES;
             else if (p.type === 'slow') s.bulletSlow = Math.max(s.bulletSlow, SLOW_FRAMES);
             else a.hp = Math.min(MAX_LIVES, a.hp + 1);
             io.reportPickup?.(p.id);
@@ -1945,19 +1968,14 @@ export function step(s, events, io) {
     }
   }
 
-  // every 50 points adds an icon to the shared map; while any D4C is active it drops every
-  // 10 points instead. Only the host (or a single player) creates them, but every player
-  // tracks the score step so a host switch doesn't drop a backlog of icons.
+  // Score drops: an ult icon every 25 points and a random icon every 50 (every 10 while any
+  // D4C is up). Only the host (or a single player) creates them, but every player tracks the
+  // score step so a host switch doesn't drop a backlog of icons.
   const unit = Math.floor(s.score / POWERUP_STEP);
   if (unit > s.powerupLevel) {
     const from = s.powerupLevel + 1;
     s.powerupLevel = unit;
-    if (s.cont && (io.ownsWorld ? io.ownsWorld() : true)) {
-      const d4cDrop = s.d4cBuffs.length > 0;
-      for (let u = from; u <= unit; u += 1) {
-        if (d4cDrop || u % (POWERUP_EVERY / POWERUP_STEP) === 0) spawnPowerup(s);
-      }
-    }
+    if (s.cont && (io.ownsWorld ? io.ownsWorld() : true)) spawnScoreDrops(s, from, unit);
   }
   if (ctx && s.cont) {
     let hudY = 580;
