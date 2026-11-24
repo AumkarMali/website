@@ -247,7 +247,8 @@ const addBuff = (list, id, frames) => {
   if (!hasBuff(list, id)) list.push({ id, frames });
 };
 
-const ALLY_ULTS = ['world', 'killer', 'd4c', 'cmoon']; // King is too complicated for the AI
+// King is too complicated for the AI; Silver Chariot lets a helper summon its own helpers.
+const ALLY_ULTS = ['world', 'killer', 'd4c', 'cmoon', 'silver'];
 // Each helper plays one of three plans and re-rolls it every 8-16 s:
 //   defense - escort a player and shoot whatever is flying at them
 //   attack  - roam the middle and clear enemy bullets
@@ -268,15 +269,16 @@ function beginSilverLocal(s, selfId) {
 const ALLY_COLORS = ['#f97316', '#22c55e', '#e879f9', '#facc15', '#38bdf8', '#f43f5e'];
 const allyColor = (id) => ALLY_COLORS[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % ALLY_COLORS.length];
 export function spawnAlly(s, owner, x, y) {
-  if (s.allies.length >= 3) return;
   const id = `ally-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+  const ultType = ALLY_ULTS[Math.floor(Math.random() * ALLY_ULTS.length)];
   s.allies.push({
     id,
     owner,
     color: allyColor(id),
     score: 0,
-    x: Math.max(560, Math.min(700, x)),
-    y: Math.max(80, Math.min(480, y)),
+    // jittered, so a crowd of helpers doesn't appear stacked on one pixel
+    x: Math.max(560, Math.min(700, x + Math.random() * 60 - 30)),
+    y: Math.max(80, Math.min(480, y + Math.random() * 140 - 70)),
     hp: 3,
     shootCd: FIRE_EVERY,
     nextLower: true,
@@ -298,8 +300,10 @@ export function spawnAlly(s, owner, x, y) {
     y_change: 0,
     accel_x: 0,
     accel_y: 0,
-    ultCd: 0,
-    ultType: ALLY_ULTS[Math.floor(Math.random() * ALLY_ULTS.length)],
+    ultType,
+    // waits a full cooldown before its first ult, like a player who just used one; this
+    // also keeps a chain of Silver Chariot helpers summoning at a steady pace
+    ultCd: ultCooldownFor(ultType, s.ultRush),
     shots: [],
     flash: 0,
   });
@@ -487,9 +491,8 @@ function tryUlt(s, io, frozen) {
   if (frozen || !s.cont || s.ultCooldown > 0) return;
   if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
   if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
-  // Silver Chariot: summon an AI helper (30 s cooldown). No effect on other ults.
+  // Silver Chariot: summon another AI helper (30 s cooldown). No effect on other ults.
   if (s.ultType === 'silver') {
-    if (s.allies.length >= 3) return;
     s.ultCooldown = ultCooldownFor('silver', s.ultRush);
     io.sfx?.('silver');
     if (io.online?.()) {
@@ -748,8 +751,10 @@ export function step(s, events, io) {
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
   const selfId = io.selfId?.() ?? null;
-  // Latches the moment any player passes the score, and trims whatever is already running.
-  if (!s.ultRush && Math.max(s.score, io.topScore?.() ?? 0) > ULT_RUSH_SCORE) {
+  // Latches the moment any player or helper passes the score, trimming what is running.
+  let topScore = Math.max(s.score, io.topScore?.() ?? 0);
+  for (const a of s.allies) if (a.score > topScore) topScore = a.score;
+  if (!s.ultRush && topScore > ULT_RUSH_SCORE) {
     s.ultRush = true;
     if (s.ultCooldown > 0) s.ultCooldown = Math.max(0, s.ultCooldown - ULT_RUSH_CUT);
     for (const a of s.allies) if (a.ultCd > 0) a.ultCd = Math.max(0, a.ultCd - ULT_RUSH_CUT);
@@ -1450,9 +1455,17 @@ export function step(s, events, io) {
     // instead of all converging on the same spot.
     const claimed = new Set();
     const claimedLoot = new Set();
-    for (let slot = 0; slot < s.allies.length; slot += 1) {
+    // Helpers summoned this frame join next frame, so a chain of Silver Chariot helpers
+    // can't spawn its whole lineage in one tick.
+    const pendingSpawns = [];
+    // Slots fill six rows, then start new columns to the left, so an unlimited crowd
+    // still has a distinct place to stand.
+    const allyCount = s.allies.length;
+    const rows = Math.max(1, Math.min(allyCount, 6));
+    for (let slot = 0; slot < allyCount; slot += 1) {
       const a = s.allies[slot];
-      const spread = (slot - (s.allies.length - 1) / 2) * 85;
+      const spread = ((slot % rows) - (rows - 1) / 2) * 78;
+      const colShift = Math.min(Math.floor(slot / rows), 7) * 62;
       // time stop freezes every helper except the one that stopped time
       const ownTimeStop = stopped && s.timeStopBy === a.id;
       if (stopped && !ownTimeStop) continue;
@@ -1475,7 +1488,7 @@ export function step(s, events, io) {
       let aimLower = null;
       let dodging = false;
       let strafeTargetX = null;
-      let homeX = 630 + spread * 0.35; // where this plan wants the helper to idle
+      let homeX = Math.max(120, 630 + spread * 0.35 - colShift); // where this plan wants to idle
       let homeY = null;
 
       if (ownTimeStop) {
@@ -1557,7 +1570,7 @@ export function step(s, events, io) {
             guard = (a.guardId != null && io.buffTarget ? io.buffTarget(s, a.guardId) : null)
               || { x: s.x + 25, y: s.y + 25 };
             // sit between them and the stream, each defender in its own slot
-            homeX = Math.max(150, Math.min(720, guard.x - 90 + spread * 0.7));
+            homeX = Math.max(120, Math.min(720, guard.x - 90 + spread * 0.7 - colShift));
           }
           let loot = null;
           if (a.strategy === 'grab') {
@@ -1599,7 +1612,7 @@ export function step(s, events, io) {
               homeY = Math.max(62, Math.min(570, guard.y + spread)); // idle near their lane
             }
             // Back away from an approaching front bullet while still shooting.
-            if (front && front.t < 55) strafeTargetX = Math.max(homeX, 700);
+            if (front && front.t < 55) strafeTargetX = Math.max(homeX, 700 - colShift);
           }
         }
       }
@@ -1670,9 +1683,9 @@ export function step(s, events, io) {
         const other = s.allies[o];
         const dx = cx - (other.x + 25);
         const dy = cy - (other.y + 25);
-        if (Math.abs(dx) > 62 || Math.abs(dy) > 62) continue;
+        if (Math.abs(dx) > 74 || Math.abs(dy) > 74) continue;
         const dist = Math.hypot(dx, dy) || 0.01;
-        const push = ((62 - dist) / 62) * 5;
+        const push = ((74 - dist) / 74) * 7;
         // perfectly stacked: the lower slot goes up, the higher one goes down
         const ux = dist < 1 ? (o > slot ? -1 : 1) : dx / dist;
         const uy = dist < 1 ? (o > slot ? -1 : 1) : dy / dist;
@@ -1740,6 +1753,9 @@ export function step(s, events, io) {
           addBuff(s.d4cBuffs, a.id, D4C_FRAMES);
         } else if (a.ultType === 'cmoon') {
           addBuff(s.cMoonBuffs, a.id, CMOON_FRAMES);
+        } else if (a.ultType === 'silver') {
+          // a helper's own Silver Chariot, which can summon another Silver Chariot helper
+          pendingSpawns.push({ owner: a.owner, x: a.x, y: a.y });
         } else {
           used = false;
         }
@@ -1816,10 +1832,12 @@ export function step(s, events, io) {
       }
       if (a.flash > 0) a.flash -= 1;
     }
+    for (const p of pendingSpawns) spawnAlly(s, p.owner, p.x, p.y);
     // Last word on stacking: separate any pair that still overlaps after everyone moved.
     // A time stop only lets its own caster move, so that one takes the whole push.
     const canShove = (a) => !stopped || s.timeStopBy === a.id;
-    for (let pass = 0; pass < 3; pass += 1) {
+    const passes = s.allies.length > 90 ? 2 : s.allies.length > 45 ? 4 : 6;
+    for (let pass = 0; pass < passes; pass += 1) {
       let hit = false;
       for (let i = 0; i < s.allies.length; i += 1) {
         for (let j = i + 1; j < s.allies.length; j += 1) {

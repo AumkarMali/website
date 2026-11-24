@@ -582,7 +582,7 @@ const Game = ({ onClose }) => {
               >
                 <span className="block text-base font-bold text-slate-100">Silver Chariot</span>
                 <span className="mt-2 block text-sm text-white/60">
-                  Summon an AI ally with full player abilities. 30-second cooldown, up to 3 helpers.
+                  Summon an AI ally with full player abilities, every 30 seconds, with no limit.
                 </span>
               </button>
             </div>

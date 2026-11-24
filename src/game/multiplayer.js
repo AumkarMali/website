@@ -97,9 +97,8 @@ export function connect(name, onCount) {
   };
   const isHost = () => synced && alive && hostId() === id;
 
-  // Silver Chariot: spawn one AI helper next to the activator (max 3).
+  // Silver Chariot: spawn another AI helper next to the activator.
   const beginSilver = (s, activatorId) => {
-    if ((s.allies || []).length >= 3) return;
     const g = activatorId === id ? null : ghosts.get(activatorId);
     spawnAlly(s, activatorId, activatorId === id ? s.x : (g?.x ?? 400), activatorId === id ? s.y : (g?.y ?? 220));
   };
@@ -173,7 +172,7 @@ export function connect(name, onCount) {
         for (const req of ultRequests.splice(0)) {
           if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0 || s.timer < ULT_MIN_TIMER) break;
           if (req.type === 'silver') {
-            if ((s.allies || []).length < 3) beginSilver(s, req.id);
+            beginSilver(s, req.id);
           } else if (req.type === 'cmoon') {
             addBuff(s.cMoonBuffs, req.id, CMOON_FRAMES);
           } else if (req.type === 'd4c') {
