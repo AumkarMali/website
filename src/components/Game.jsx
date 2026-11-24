@@ -582,8 +582,8 @@ const Game = ({ onClose }) => {
               >
                 <span className="block text-base font-bold text-slate-100">Silver Chariot</span>
                 <span className="mt-2 block text-sm text-white/60">
-                  Summon an AI ally every 30 seconds. Each one is a Silver Chariot too, so they
-                  keep summoning more of themselves.
+                  Summon an AI ally every 30 seconds, with no limit. Each one gets a random
+                  ultimate of its own.
                 </span>
               </button>
             </div>

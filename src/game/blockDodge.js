@@ -246,8 +246,9 @@ const addBuff = (list, id, frames) => {
   if (!hasBuff(list, id)) list.push({ id, frames });
 };
 
-// Every helper is a Silver Chariot, so each one summons more Silver Chariots.
-const ALLY_ULTS = ['silver'];
+// A helper rolls any character except King Crimson, which is too complicated for the AI.
+// Silver Chariot is in the pool, so some helpers summon helpers of their own.
+const ALLY_ULTS = ['world', 'killer', 'd4c', 'cmoon', 'silver'];
 // Each helper plays one of three plans and re-rolls it every 8-16 s:
 //   defense - escort a player and shoot whatever is flying at them
 //   attack  - roam the middle and clear enemy bullets
