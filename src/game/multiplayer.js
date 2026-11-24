@@ -357,6 +357,12 @@ export function connect(name, onCount) {
       return s.y;
     },
 
+    topScore() {
+      let top = 0;
+      for (const [, g] of ghosts) if ((g.score || 0) > top) top = g.score;
+      return top;
+    },
+
     randomPlayerId() {
       const ids = alive ? [id] : [];
       for (const [gid, g] of ghosts) if (g.alive) ids.push(gid);

@@ -63,6 +63,11 @@ const ULT_FX_DELAY_FRAMES = 90; // the ripple starts 1.5 s after the clip starts
 const ULT_FX_CUT_FRAMES = 18; // the ripple stops 0.3 s before the clip ends
 const ULT_FX_FRAMES = ULT_AUDIO_FRAMES - ULT_FX_DELAY_FRAMES - ULT_FX_CUT_FRAMES;
 const ULT_COOLDOWN = 30 * 60;
+// Once anyone passes this score every ultimate, player and helper alike, comes back 5 s sooner.
+export const ULT_RUSH_SCORE = 500;
+const ULT_RUSH_CUT = 5 * 60;
+const ultCooldownFor = (type, rush) =>
+  (type === 'd4c' ? D4C_COOLDOWN : ULT_COOLDOWN) - (rush ? ULT_RUSH_CUT : 0);
 // After a hit or recoil the normal speed limit applies for KNOCK_FRAMES, so a speed boost
 // can't throw you twice as far. Shooting a yellow bullet pushes back half as hard.
 const KNOCK_FRAMES = 15;
@@ -178,6 +183,7 @@ export function createState(ultType = 'world') {
     d4cBuffs: [], // [{ id, frames }] players protected by D4C
     cMoonBuffs: [], // [{ id, frames }] players pulling and absorbing bullets with C-Moon
     allies: [], // AI helpers summoned by Silver Chariot (host-simulated, shared)
+    ultRush: false, // someone passed ULT_RUSH_SCORE: every ultimate recharges 5 s faster
     gv1x: 0, gv1y: 0, // C-Moon gravity velocity added to each enemy bullet
     gv2x: 0, gv2y: 0,
     gv21x: 0, gv21y: 0,
@@ -484,7 +490,7 @@ function tryUlt(s, io, frozen) {
   // Silver Chariot: summon an AI helper (30 s cooldown). No effect on other ults.
   if (s.ultType === 'silver') {
     if (s.allies.length >= 3) return;
-    s.ultCooldown = ULT_COOLDOWN;
+    s.ultCooldown = ultCooldownFor('silver', s.ultRush);
     io.sfx?.('silver');
     if (io.online?.()) {
       io.sendUltSound?.('silver');
@@ -499,7 +505,7 @@ function tryUlt(s, io, frozen) {
   if (s.ultType === 'd4c' && hasBuff(s.d4cBuffs, selfId)) return;
   if (s.ultType === 'cmoon' && hasBuff(s.cMoonBuffs, selfId)) return;
   if (s.ultType === 'king') saveKingSnapshot(s); // rollback point for the erase
-  s.ultCooldown = s.ultType === 'd4c' ? D4C_COOLDOWN : ULT_COOLDOWN;
+  s.ultCooldown = ultCooldownFor(s.ultType, s.ultRush);
   if (s.ultType === 'killer' || s.ultType === 'd4c' || s.ultType === 'cmoon') {
     io.sfx?.(s.ultType); // local activation clip
     io.sendUltSound?.(s.ultType); // and the same clip on everyone else's screen
@@ -742,6 +748,12 @@ export function step(s, events, io) {
   const isUlter = (st) => (io.isUlter ? io.isUlter(st) : st.timeStopBy == null);
   const isSlowUlter = (st) => (io.isSlowUlter ? io.isSlowUlter(st) : st.slowBy == null);
   const selfId = io.selfId?.() ?? null;
+  // Latches the moment any player passes the score, and trims whatever is already running.
+  if (!s.ultRush && Math.max(s.score, io.topScore?.() ?? 0) > ULT_RUSH_SCORE) {
+    s.ultRush = true;
+    if (s.ultCooldown > 0) s.ultCooldown = Math.max(0, s.ultCooldown - ULT_RUSH_CUT);
+    for (const a of s.allies) if (a.ultCd > 0) a.ultCd = Math.max(0, a.ultCd - ULT_RUSH_CUT);
+  }
   const aiControlledNow = s.slow > 0 && !isSlowUlter(s);
   const frozenNow = s.timeStop > 0 && !isUlter(s);
 
@@ -1736,7 +1748,7 @@ export function step(s, events, io) {
             io.sfx?.(a.ultType);
             io.sendUltSound?.(a.ultType);
           }
-          a.ultCd = a.ultType === 'd4c' ? 20 * 60 : 30 * 60;
+          a.ultCd = ultCooldownFor(a.ultType, s.ultRush);
         }
       }
 

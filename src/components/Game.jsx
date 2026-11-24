@@ -418,6 +418,7 @@ const Game = ({ onClose }) => {
         selfId: () => mp?.playerId() ?? null,
         online: () => !!mp,
         randomPlayerId: () => mp?.randomPlayerId() ?? null,
+        topScore: () => mp?.topScore() ?? 0,
         buffTarget: (st, buffId) => {
           const ally = (st.allies || []).find((a) => a.id === buffId);
           if (ally) return { x: ally.x + 25, y: ally.y + 25 };
