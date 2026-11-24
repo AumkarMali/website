@@ -27,7 +27,7 @@ const KICK_FRAMES = 8; // loaded-bullet recoil animation after each shot
 const KICK_DIST = 7; // px the loaded bullets jump back
 const SNIPER_SPEED = 0.7; // sniper bullets move 30% slower than in the original
 // Power-up: every time any player reaches a multiple of 50 points, a random icon appears at
-// a random spot: 10 s of 2x speed, 10 s of 2x fire rate, 10 s of half-speed enemy bullets,
+// a random spot: an instant ultimate, 10 s of 2x fire rate, 10 s of half-speed enemy bullets,
 // or an extra life (up to MAX_LIVES).
 // Icons stay on the field until someone picks them up or the 50 s lifetime runs out.
 const POWERUP_EVERY = 50;
@@ -36,7 +36,7 @@ const POWERUP_FRAMES = 50 * 60; // icon disappears after 50 s if nobody picks it
 const POWERUP_SIZE = 30;
 const BOOST_FRAMES = 10 * 60;
 const BOOST = 2;
-const POWERUP_TYPES = ['speed', 'fire', 'life', 'slow'];
+const POWERUP_TYPES = ['ult', 'fire', 'life', 'slow'];
 const MAX_LIVES = 3;
 export const SLOW_FRAMES = 10 * 60; // enemy-bullet slow power-up lasts 10 s
 // Ultimate, "the world": pressing T starts the clip and a 2 s windup while the game still
@@ -197,7 +197,6 @@ export function createState(ultType = 'world') {
     aiTimer: 0,
     aiPause: 0,
     aiPrev: false, // were we on autopilot last frame?
-    speedBoost: 0, // frames of 2x speed left
     fireBoost: 0, // frames of 2x fire rate left
     bulletSlow: 0, // frames of half-speed enemy bullets left (shared power-up)
     knock: 0, // frames of knockback speed limit left
@@ -247,8 +246,8 @@ const addBuff = (list, id, frames) => {
   if (!hasBuff(list, id)) list.push({ id, frames });
 };
 
-// King is too complicated for the AI; Silver Chariot lets a helper summon its own helpers.
-const ALLY_ULTS = ['world', 'killer', 'd4c', 'cmoon', 'silver'];
+// Every helper is a Silver Chariot, so each one summons more Silver Chariots.
+const ALLY_ULTS = ['silver'];
 // Each helper plays one of three plans and re-rolls it every 8-16 s:
 //   defense - escort a player and shoot whatever is flying at them
 //   attack  - roam the middle and clear enemy bullets
@@ -292,7 +291,6 @@ export function spawnAlly(s, owner, x, y) {
     strategy: ALLY_STRATEGIES[Math.floor(Math.random() * ALLY_STRATEGIES.length)],
     strategyTtl: allyStrategyFrames(),
     guardId: owner ?? null, // player escorted by the defense plan
-    speedBoost: 0,
     fireBoost: 0,
     dodgeFromRight: false,
     dodgeY: null,
@@ -419,13 +417,13 @@ export function applyRemoteHit(s, bullet, io) {
   }
 }
 
-// Glowing power-up icon, pulsing as it waits: bolt (speed), bullet (fire rate), heart (life).
+// Glowing power-up icon, pulsing as it waits: star (ult), bullet (fire rate), heart (life).
 function drawPowerup(ctx, p, images = {}) {
   const r = POWERUP_SIZE / 2;
   const cx = p.x + r;
   const cy = p.y + r;
   const pulse = 1 + 0.12 * Math.sin(p.ttl / 6);
-  const color = { speed: '#facc15', fire: '#fb923c', life: '#ef4444', slow: '#38bdf8' }[p.type];
+  const color = { ult: '#a855f7', fire: '#fb923c', life: '#ef4444', slow: '#38bdf8' }[p.type];
   ctx.save();
   ctx.globalAlpha = p.ttl < 120 && Math.floor(p.ttl / 8) % 2 === 0 ? 0.35 : 1; // blink before it goes
   ctx.shadowColor = color;
@@ -458,13 +456,15 @@ function drawPowerup(ctx, p, images = {}) {
       ctx.fill();
     } else {
       ctx.fillStyle = '#1f1f1f';
-      ctx.beginPath(); // lightning bolt
-      ctx.moveTo(cx + 3, cy - 11);
-      ctx.lineTo(cx - 7, cy + 2);
-      ctx.lineTo(cx - 1, cy + 2);
-      ctx.lineTo(cx - 3, cy + 11);
-      ctx.lineTo(cx + 7, cy - 2);
-      ctx.lineTo(cx + 1, cy - 2);
+      ctx.beginPath(); // four-point star: your ultimate, ready now
+      for (let i = 0; i < 8; i += 1) {
+        const ang = (i / 8) * Math.PI * 2 - Math.PI / 2;
+        const rad = i % 2 === 0 ? 12 : 4.5;
+        const px = cx + Math.cos(ang) * rad;
+        const py = cy + Math.sin(ang) * rad;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
       ctx.closePath();
       ctx.fill();
     }
@@ -487,10 +487,11 @@ export function spawnPowerup(s, rng = Math.random) {
 
 // Ultimate: freeze time (The World), slow the world (King Crimson), or a personal buff
 // (Killer Queen / D4C). Personal buffs can overlap across players.
-function tryUlt(s, io, frozen) {
-  if (frozen || !s.cont || s.ultCooldown > 0) return;
+// instant: fired by the ult power-up, which skips the cooldown and the opening lockout.
+function tryUlt(s, io, frozen, instant = false) {
+  if (frozen || !s.cont || (s.ultCooldown > 0 && !instant)) return;
   if (s.timeStop > 0 || s.ultWindup > 0 || s.slow > 0 || s.kingWindup > 0) return;
-  if (s.timer < ULT_MIN_TIMER) return; // no ultimate in the first 10 s
+  if (s.timer < ULT_MIN_TIMER && !instant) return; // no ultimate in the first 10 s
   // Silver Chariot: summon another AI helper (30 s cooldown). No effect on other ults.
   if (s.ultType === 'silver') {
     s.ultCooldown = ultCooldownFor('silver', s.ultRush);
@@ -935,12 +936,9 @@ export function step(s, events, io) {
   if (!stopped && levels <= 4) music.play();
 
   if (!frozen) {
-    const speed = (s.speedBoost > 0 ? BOOST : 1) * (cMoonOn ? CMOON_BOOST : 1) * selfScale;
+    const speed = (cMoonOn ? CMOON_BOOST : 1) * selfScale;
     // item timers freeze while time is stopped, even for the player who stopped it
-    if (!stopped) {
-      if (s.speedBoost > 0) s.speedBoost -= 1;
-      if (s.fireBoost > 0) s.fireBoost -= 1;
-    }
+    if (!stopped && s.fireBoost > 0) s.fireBoost -= 1;
     const cap = s.knock > 0 ? s.knockCap * selfScale : max_speed * speed;
     if (s.knock > 0) s.knock -= 1;
     s.x_change += s.accel_x * speed;
@@ -983,8 +981,10 @@ export function step(s, events, io) {
   for (const p of s.powerups) {
     if (!stopped) p.ttl -= 1;
     if (!frozen && s.cont && collide(sprite, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
-      if (p.type === 'speed') s.speedBoost = BOOST_FRAMES;
-      else if (p.type === 'fire') s.fireBoost = BOOST_FRAMES;
+      if (p.type === 'ult') {
+        s.ultCooldown = 0; // ready again even if the ult can't start this instant
+        tryUlt(s, io, frozen, true);
+      } else if (p.type === 'fire') s.fireBoost = BOOST_FRAMES;
       else if (p.type === 'slow') s.bulletSlow = SLOW_FRAMES;
       else s.lives = Math.min(MAX_LIVES, s.lives + 1);
       io.reportPickup?.(p.id);
@@ -1095,7 +1095,7 @@ export function step(s, events, io) {
   };
 
   if (!frozen) {
-    // A bounce is always the normal max speed, even during a 2x speed boost: the 400 impulse
+    // A bounce is always the normal max speed, whatever boost is running: the 400 impulse
     // used to be clamped by the boosted cap, which made boosted wall bounces twice as fast.
     if (collide(sprite, wall1)) {
       s.x_change = max_speed;
@@ -1471,14 +1471,11 @@ export function step(s, events, io) {
       if (stopped && !ownTimeStop) continue;
       const slowScale = s.slow > 0 && s.slowBy !== a.id ? 0.25 : 1;
       if (!stopped) {
-        if (a.speedBoost > 0) a.speedBoost -= 1;
         if (a.fireBoost > 0) a.fireBoost -= 1;
         a.strategyTtl = (a.strategyTtl || 0) - 1;
         if (a.strategyTtl <= 0 || !a.strategy) rollStrategy(a, io);
       }
-      const moveSpeed = slowScale
-        * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1)
-        * (a.speedBoost > 0 ? BOOST : 1);
+      const moveSpeed = slowScale * (hasBuff(s.cMoonBuffs, a.id) ? 1.25 : 1);
       const aiCap = max_speed * moveSpeed;
       const cx = a.x + 25;
       const cy = a.y + 25;
@@ -1804,7 +1801,7 @@ export function step(s, events, io) {
         const leftForPlayers = [];
         for (const p of s.powerups) {
           if (p.ttl > 0 && collide(ar, { x: p.x, y: p.y, w: POWERUP_SIZE, h: POWERUP_SIZE })) {
-            if (p.type === 'speed') a.speedBoost = BOOST_FRAMES;
+            if (p.type === 'ult') a.ultCd = 0; // helper ults on the next frame
             else if (p.type === 'fire') a.fireBoost = BOOST_FRAMES;
             else if (p.type === 'slow') s.bulletSlow = Math.max(s.bulletSlow, SLOW_FRAMES);
             else a.hp = Math.min(MAX_LIVES, a.hp + 1);
@@ -1963,10 +1960,6 @@ export function step(s, events, io) {
   }
   if (ctx && s.cont) {
     let hudY = 580;
-    if (s.speedBoost > 0) {
-      text(ctx, 'bold 18px Arial, sans-serif', `SPEED ${BOOST}x  ${(s.speedBoost / 60).toFixed(1)}s`, [250, 204, 21], 110, hudY);
-      hudY -= 24;
-    }
     if (s.fireBoost > 0) {
       text(ctx, 'bold 18px Arial, sans-serif', `FIRE ${BOOST}x  ${(s.fireBoost / 60).toFixed(1)}s`, [251, 146, 60], 110, hudY);
       hudY -= 24;
